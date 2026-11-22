@@ -48,7 +48,7 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
@@ -58,16 +58,22 @@ import { SCANNER_EYE_BUTTON, SCANNER_PANEL_SURFACE, SOFT_LOSS_TEXT_CLASS, STREAM
 import { BookLevelsIcon, CrosshairIcon, EyeToggleIcon, GlassCard, GlassInput, GlassSelect, LockToggleIcon, MinMaxRow, MultiSelectFilter, SummaryMetricCard } from "./shared/ui";
 import { defineScannerStrategy } from "../../lib/scanner/strategy";
 import OPGReversalAutoOptimizer from "./OPGReversalAutoOptimizer";
+import { ScannerMarketControl } from "../shared/filters/ScannerMarketControl";
+import { RatingModeMenu } from "./OPGReversalRatingMenu";
+import { parseMarketTypeMeta, parseMarketTypes } from "../../lib/marketType";
+import type { MarketTypeKey, MarketTypeMeta } from "../../lib/marketType";
 import type { OPGReversalAutoOptRow } from "../../lib/scanner/opgReversalAutoOptimizer";
 import { ScannerTableStyles, ScannerThemeStyles } from "./shared/ScannerGlobalStyles";
 import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
-import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { useActiveTickerSelection, useActiveTickerSnapshot, useRowTickerSelect } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import ScannerControlCard from "./shell/panels/ScannerControlCard";
+import { useMarketTypeByDay } from "../../lib/scanner/useMarketTypeByDay";
 type OPGReversalUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 
 /** Same six glyphs as the %/σ/α/γ/τ/λ unit-toggle pills (opgReversalUnitMode's own render block). */
@@ -803,18 +809,11 @@ export default function OPGReversalScanner({
    */
   const [opgReversalFrozen, setOpgReversalFrozen] = useState(false);
 
-  /**
-   * CORE - restrict the run to the small, slow-moving set of tickers that have performed well
-   * CONSISTENTLY (depth + breadth + positive in every trailing window + a shrunk LB over zero,
-   * with hysteresis so incumbents are sticky). Rebuilt as of each day, so it carries no look-ahead
-   * and composes with whichever rating mode is selected.
-   *
-   * OFF by default, deliberately. The measurement that preceded it (2026-11-08, 65 sessions) found
-   * the STABILITY real - daily churn 46.5% -> 20.0%, published value moving 0.0008/day - and the
-   * EDGE absent: a ticker's first-half mean pnl predicts its second-half mean at corr +0.006, and
-   * tighter screening came out WORSE out of sample, which is the signature of selecting luck. It
-   * was built on the operator's explicit instruction, with that caveat on record.
-   */
+  // CORE - restrict the run to the small, slow-moving set of tickers that have performed well
+  // CONSISTENTLY (rebuilt as of each day, so no look-ahead). OFF by default, deliberately: measured on 65
+  // sessions the STABILITY is real and the EDGE is not (per-ticker persistence corr +0.006). It lives in
+  // the rating menu beside RATE now (the toolbar button was removed 2026-11-22, the menu entry added the
+  // same day); when it is on, its target icon shows next to the word RATE so it can never run unseen.
   const [opgReversalCoreOnly, setOpgReversalCoreOnly] = useState(false);
 
   // RATE/UNIVERSE — the operator's own instruction (2026-09-25): a single button next to MINRATE/
@@ -824,6 +823,22 @@ export default function OPGReversalScanner({
   // separate violet-strip toggle the operator said was not needed there ("не потрібні"), now brought
   // back here in its own place and style, not restoring the old Γ/Ø pills.
   const [opgReversalIgnoreRatings, setOPGReversalIgnoreRatings] = useState(false);
+
+  // MARKET TYPE — the operator's own instruction (2026-11-21): show only the DAYS whose market type
+  // (PANIC / RISK_OFF / MIXED / HEDGE_BID / QUIET / VOL_CRUSH / RISK_ON / EUPHORIA / UNKNOWN, read by the
+  // bridge from the tape at 09:19 ET - the minute before the 09:20-09:25 signal, so a day's type is
+  // known before its trade) are chosen. One or several; empty = ALL. Enforced SERVER-side per day
+  // (PaperOPGReversalController), so the table, the SNAPSHOT summary, the equity curve and the AUTO
+  // OPTIMIZER all see the same days. It is deliberately not part of the bridge's VariantKey: it picks
+  // which built days are shown, it does not change what a day computes, so toggling it rebuilds nothing.
+  const [marketTypes, setMarketTypes] = useState<MarketTypeKey[]>([]);
+  // The MARKET button (2026-11-22, the operator's own instruction): off hides the whole icon list AND drops
+  // the restriction (nothing is sent), on shows it and applies the pick. The pick itself is kept while off,
+  // so turning it back on restores it. Off must mean "not filtering" - a list that is hidden but still
+  // rejecting days would be a filter nobody can see (the same reason CORE shows an icon beside RATE).
+  const [marketOn, setMarketOn] = useState(true);
+  // What the bridge last said about the range (how many days each type has): drives the pill tooltips.
+  const [marketTypeMeta, setMarketTypeMeta] = useState<MarketTypeMeta | null>(null);
   // Bumped by applyOPGReversalAutoOptimizerRow once a result has landed in state, so the run that
   // follows always sees the FRESH values — mirrors ArbitrageScanner's own autoRunTick exactly.
   const [autoRunTick, setAutoRunTick] = useState(0);
@@ -834,6 +849,36 @@ export default function OPGReversalScanner({
   // which PairFlux/every strategy's tape row already carry).
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
+
+  // The STATS button (2026-11-22, the operator's own instruction): hides the σ / α / γ min-max boxes. Those
+  // six values feed the request, the client filter, the optimizer and the scope view from many places, so
+  // "hidden" is done the one way that is safe everywhere: switching OFF parks the six values in
+  // statsStash and CLEARS them (an empty box filters nothing, wherever it is read); switching ON puts them
+  // back. A hidden box can therefore never be rejecting rows. If something sets a value while the group
+  // is off (a preset, an optimizer result), the group switches itself back ON - the filter that just
+  // arrived is shown, not applied in the dark.
+  const STAT_KEYS = ["minSigma", "maxSigma", "minAlpha", "maxAlpha", "minGamma", "maxGamma"] as const;
+  const statValues: Record<(typeof STAT_KEYS)[number], string> = { minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma };
+  const statSetters: Record<(typeof STAT_KEYS)[number], (v: string) => void> = {
+    minSigma: setMinSigma, maxSigma: setMaxSigma, minAlpha: setMinAlpha, maxAlpha: setMaxAlpha, minGamma: setMinGamma, maxGamma: setMaxGamma,
+  };
+  const [statsOn, setStatsOn] = useState(true);
+  const [statsStash, setStatsStash] = useState<Record<string, string>>({});
+  const toggleStats = () => {
+    if (statsOn) {
+      setStatsStash({ ...statValues });
+      for (const k of STAT_KEYS) statSetters[k]("");
+      setStatsOn(false);
+    } else {
+      for (const k of STAT_KEYS) if (!statValues[k] && statsStash[k]) statSetters[k](statsStash[k]);
+      setStatsStash({});
+      setStatsOn(true);
+    }
+  };
+  useEffect(() => {
+    if (!statsOn && STAT_KEYS.some((k) => String(statValues[k] ?? "").trim() !== "")) setStatsOn(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statsOn, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma]);
   // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
   // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
   // the short-side floor when the field is empty.
@@ -1296,6 +1341,9 @@ export default function OPGReversalScanner({
   // the same request-body string episodesSearchCache itself keys on, so a TTL cache HIT (no
   // fetcher call) still has a summary to hand back — see fetchEpisodesSearchRows below.
   const opgReversalSummaryByKeyRef = useRef<Map<string, OPGReversalAnalyticsSummaryDto | null>>(new Map());
+  // The same idea for the market-type block of the response (days per type in the range): stashed per
+  // request key so a cache HIT still has it to hand back.
+  const marketTypeMetaByKeyRef = useRef<Map<string, MarketTypeMeta | null>>(new Map());
   const [serverAnalyticsSummary, setServerAnalyticsSummary] = useState<{ summary: OPGReversalAnalyticsSummaryDto; equityCurveMode: string } | null>(null);
 
   useEffect(() => {
@@ -1626,7 +1674,7 @@ export default function OPGReversalScanner({
     return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
   }, [sortedDaysDesc, dateFrom, dateTo]);
 
-  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d") => {
     setDateMode("last");
     if (tab === "episodes") setEpisodesUseSearch(true);
     setRangePreset(preset);
@@ -1635,7 +1683,9 @@ export default function OPGReversalScanner({
       preset === "5d" ? 5 :
       preset === "10d" ? 10 :
       preset === "15d" ? 15 :
-      preset === "20d" ? 20 : 30;
+      preset === "20d" ? 20 :
+      preset === "30d" ? 30 :
+      preset === "60d" ? 60 : 90;
     const end = sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd();
     if (!sortedDaysAsc.length) {
       setDateTo(end);
@@ -1725,6 +1775,10 @@ export default function OPGReversalScanner({
           setOpgReversalRatingsMode(s.opgReversalRatingsMode);
         if (typeof s.opgReversalFrozen === "boolean") setOpgReversalFrozen(s.opgReversalFrozen);
         if (typeof s.opgReversalCoreOnly === "boolean") setOpgReversalCoreOnly(s.opgReversalCoreOnly);
+        // parseMarketTypes drops anything that is not a current label, so a saved list from an older
+        // build cannot restore into a filter that silently matches nothing.
+        if (Array.isArray(s.marketTypes)) setMarketTypes(parseMarketTypes(s.marketTypes));
+        if (typeof s.marketOn === "boolean") setMarketOn(s.marketOn);
         const preferStreamAutomationDilution =
           isStreamOnlyShell && streamAutomationConfigOverride != null;
         if (!preferStreamAutomationDilution && (s.dilutionMode === "Undiluted" || s.dilutionMode === "Diluted")) {
@@ -1850,6 +1904,12 @@ export default function OPGReversalScanner({
         applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
         applyStr(s.minAlpha, setMinAlpha); applyStr(s.maxAlpha, setMaxAlpha);
         applyStr(s.minGamma, setMinGamma); applyStr(s.maxGamma, setMaxGamma);
+        if (typeof s.statsOn === "boolean") setStatsOn(s.statsOn);
+        if (s.statsStash && typeof s.statsStash === "object") {
+          const o: Record<string, string> = {};
+          for (const [k, v] of Object.entries(s.statsStash)) if (typeof v === "string") o[k] = v;
+          setStatsStash(o);
+        }
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
         applyStr(s.minRoundLot, setMinRoundLot); applyStr(s.maxRoundLot, setMaxRoundLot);
         applyStr(s.minAdv20, setMinAdv20); applyStr(s.maxAdv20, setMaxAdv20);
@@ -1971,13 +2031,15 @@ export default function OPGReversalScanner({
       opgReversalMinTotal,
       opgReversalUnitMode,
       opgReversalIgnoreRatings,
-      // Which rating table the scanner judges by, and whether CORE narrows it. These were the only
+      // Which rating table the scanner judges by, and whether FROZEN cuts it per day. These were the only
       // two toolbar controls that silently reset on reload - worse than it sounds here, because the
       // page would come back on ASOF showing different numbers from the ones that were on screen,
       // with nothing to say why.
       opgReversalRatingsMode,
       opgReversalFrozen,
       opgReversalCoreOnly,
+      marketTypes,
+      marketOn,
       dilutionMode,
       dilutionStep,
       maxAdds,
@@ -2029,6 +2091,8 @@ export default function OPGReversalScanner({
       maxAlpha,
       minGamma,
       maxGamma,
+      statsOn,
+      statsStash,
       minMarketCapM,
       maxMarketCapM,
       minRoundLot,
@@ -2161,7 +2225,7 @@ export default function OPGReversalScanner({
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
-      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
+      minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, statsOn, statsStash, minMarketCapM, maxMarketCapM, minRoundLot, maxRoundLot, minAdv20,
       maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF,
       minPreMktVol, maxPreMktVol, minPreMktVolNF, maxPreMktVolNF, minSpread, maxSpread,
       minSpreadBps, maxSpreadBps, minGap, maxGap, minGapPct, maxGapPct, minClsToClsPct,
@@ -2186,6 +2250,9 @@ export default function OPGReversalScanner({
       minImbExchValue, maxImbExchValue,
       opgReversalExitClass, opgReversalMinDevAbsShort, opgReversalMinDevAbsLong, opgReversalMinDevAbsMax, opgReversalMinGammaTotal,
       opgReversalMinRate, opgReversalMinTotal, opgReversalUnitMode, opgReversalIgnoreRatings,
+      // These four are in the snapshot above but were missing here, so changing ONLY one of them did not
+      // re-write the saved state until some other control moved.
+      opgReversalRatingsMode, opgReversalFrozen, opgReversalCoreOnly, marketTypes, marketOn,
     ]
   );
 
@@ -2674,6 +2741,7 @@ export default function OPGReversalScanner({
   );
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
   const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  useRowTickerSelect(ACTIVE_TICKER_STRATEGY);
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeCardStats = useMemo(() => {
     const f = activeSnapshot.fields ?? {};
@@ -2987,6 +3055,12 @@ export default function OPGReversalScanner({
       // floor/cap alone. Re-added 2026-09-25 (the operator's own instruction) — the earlier Γ/Ø
       // violet-strip toggle this used to be stayed removed; this is a new control in a new place.
       ignoreRatings: opgReversalIgnoreRatings,
+
+      // MARKET TYPE: keep only the days of these types (null = every day). Resolved per day on the
+      // bridge, so it reaches the table, the SNAPSHOT summary and the AUTO OPTIMIZER alike - and it is
+      // part of the request body, hence of the episodes-search cache key below, so a different choice
+      // can never be answered from rows fetched under another.
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       sizeValue: normalizeScannerSizeValue(sizingMode, sizeValue),
@@ -3405,9 +3479,11 @@ export default function OPGReversalScanner({
       apiPost<any>(`${STRATEGY.api.base}/episodes/search`, { ...body, includeBestParams: false })
         .then((j) => {
           opgReversalSummaryByKeyRef.current.set(key, (j?.summary as OPGReversalAnalyticsSummaryDto | undefined) ?? null);
+          marketTypeMetaByKeyRef.current.set(key, parseMarketTypeMeta(j));
           return normalizeRowsWithBestParams<PaperArbClosedDto>(j) ?? [];
         })
     );
+    setMarketTypeMeta(marketTypeMetaByKeyRef.current.get(key) ?? null);
     // Every caller of this function wants the SNAPSHOT cards to reflect whatever rows it just
     // fetched (or reused from cache) — one call site to keep in sync instead of three.
     const fetchedSummary = opgReversalSummaryByKeyRef.current.get(key) ?? null;
@@ -4556,6 +4632,7 @@ export default function OPGReversalScanner({
       return true;
     });
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   // The SNAPSHOT table predates the shared row shape and reads OPGReversal's own field names, so
   // translate once here rather than in every cell. No bid/ask crossing and no bench leg: entry and
@@ -5132,6 +5209,7 @@ export default function OPGReversalScanner({
             // BenchTicker to "" since OPGReversal has no hedge leg (the same reason benchPnlUsd/
             // hedgedPnlUsd are already excluded from scope RESULTS below) — the axis could only ever
             // render one empty-string bucket, which looks exactly like a broken parameter.
+            if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
             if (catParam) catResults.push(catParam);
             return null;
           }
@@ -5201,6 +5279,7 @@ export default function OPGReversalScanner({
         }
         // "bench" deliberately NOT built here — see the same skip's own comment above, in this
         // function's useBinRatingFilter branch.
+        if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
         if (catParam) parameterMap.set(definition.key, catParam);
         continue;
       }
@@ -6003,6 +6082,14 @@ export default function OPGReversalScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+          {/* MARKET TYPE — keep only the days of the chosen type(s), one or several at once
+              (the operator's own instruction, 2026-11-21). FIRST in the row, before RATE (the operator's own
+              instruction, 2026-11-22): which DAYS are shown comes before which ratings gate the trades inside
+              them, and it is independent of RATE/UNIVERSE, so it never disappears under UNIVERSE. The label is read by the
+              bridge from the tape at 09:19 ET (SPY, QQQ, VXX), the minute before the 09:20-09:25
+              signal, so a day's type is already known when its trade is taken. */}
+          <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} meta={marketTypeMeta} />
+
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
               win_rate/total (OPGReversalGate.cs), reaching OPGReversalGate.Check via buildOPGReversalParams.
               Own separate pills, copied 1-to-1 off ArbitrageScanner's own MINRATE/MINTOTAL boxes —
@@ -6011,146 +6098,49 @@ export default function OPGReversalScanner({
               ALL/TOP toggle + ρ/β/σ range boxes reading arbitrageTickerMetaByTicker — Arbitrage's OWN
               corr/beta/sigma, wrong data entirely for a OPGReversal ticker (OPGReversal has no corr/beta
               concept at all) — removed. */}
-          {/* RATE/UNIVERSE — the operator's own instruction (2026-09-25, moved before MINRATE/
-              MINTOTAL on a follow-up correction): drops the per-ticker gamma lookup (and MINRATE/
-              MINTOTAL/MinGammaTotal riding on it) entirely when off, gating on the flat floor/cap
-              alone — same ignoreRatings escape hatch Sonar's own Γ/Ø pills drive (OPGReversalGate.cs),
-              just a single solid-colored button here instead of a pill pair: gold "RATE" while
-              ratings are applied, red "UNIVERSE" once they are dropped. Sits immediately before the
-              two pills it visibly governs (grayed out below when UNIVERSE is active), not after. */}
+          {/* RATE — the operator's own instruction (2026-09-25, moved before MINRATE/MINTOTAL on a follow-up
+              correction): drops the per-ticker gamma lookup (and MINRATE/MINTOTAL/MinGammaTotal riding on
+              it) entirely when off, gating on the flat floor/cap alone - the same ignoreRatings escape
+              hatch Sonar's own Γ/Ø pills drive (OPGReversalGate.cs). One solid button: amber while ratings
+              are applied, GRAY once they are dropped, and the word stays "RATE" either way (2026-11-22:
+              it used to turn red and read "UNIVERSE"; the operator wanted the same on/off look as the
+              MARKET button beside it). The choices made in the options menu are no longer drawn on this
+              button - the menu's own trigger lights up for them. Sits immediately before the two pills it
+              visibly governs (grayed out below when it is off), not after. */}
           <button
             type="button"
             onClick={() => setOPGReversalIgnoreRatings((v) => !v)}
+            aria-pressed={!opgReversalIgnoreRatings}
             title={opgReversalIgnoreRatings
-              ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL/MinGammaTotal. Click to apply ratings again."
-              : "RATE — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL/MinGammaTotal enforced. Click to drop ratings (UNIVERSE)."}
+              ? "RATE off (UNIVERSE) — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL/MinGammaTotal. Click to apply ratings again."
+              : "RATE on — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL/MinGammaTotal enforced. Click to drop ratings (UNIVERSE)."}
             className={clsx(
               "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
               opgReversalIgnoreRatings
-                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
+                ? "bg-black/20 text-zinc-400 hover:bg-white/5 hover:text-white"
                 : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
             )}
           >
-            {opgReversalIgnoreRatings ? "UNIVERSE" : "RATE"}
+            RATE
           </button>
 
-          {/* WHICH rating table each replayed day is judged by - AS-OF / AS-OF lambda / FROZEN /
-              LIVE. Placed directly AFTER the RATE button and hidden entirely once UNIVERSE is on
-              (the operator's own call, 2026-11-08; it was dimmed-but-present for one revision).
-              The reasoning is sound: UNIVERSE drops the ticker's published table altogether, so
-              there is no table left to choose between - a visible control that cannot do
-              anything is worse than no control.
-
-              RATE/UNIVERSE decides WHETHER ratings apply; this decides WHICH ones; MINRATE and
-              MINTOTAL after it threshold whatever comes out. Secondary Button Standard
-              (AGENTS.md): shared h-7 container, same pill classes, same active treatment. */}
-          {/* SHOWN ON THE STREAM TOO (the operator's own correction, 2026-11-08, after I
-              wrongly hid it there). A rating is ALWAYS built from history and can never
-              anticipate today, so "as of" is exactly as meaningful live as it is in a
-              replay: the stream wants the table built from trades strictly BEFORE today.
-              And the rating is a primary condition for which candidates the stream picks
-              up at all, not a reporting detail. */}
+          {/* WHICH rating table each replayed day is judged by (ASOF / EXPO / LIVE), FROZEN and CORE - one
+              icon menu beside RATE (the operator's own instruction, 2026-11-22), replacing the two capsules of
+              words. Hidden once UNIVERSE is on: UNIVERSE drops the ticker's published table altogether, so
+              there is no table left to choose between (the operator's own call, 2026-11-08) - a visible control
+              that cannot do anything is worse than no control. SHOWN ON THE STREAM TOO: a rating is always
+              built from history and can never anticipate today, so "as of" is exactly as meaningful live as
+              in a replay (the operator's own correction, 2026-11-08). The trigger lights up while anything
+              other than the default (ASOF, not frozen, no CORE) is chosen. */}
           {!opgReversalIgnoreRatings && (
-              <>
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {/* FOUR LETTERS EACH, so the strip reads as a row of equal words rather than a
-                    ragged one (the operator's own instruction, 2026-11-08): ASOF / EXPO / LIVE,
-                    then CORE. FRZN left this row on 2026-11-11 - it is a ❄ in the next capsule,
-                    because it qualifies all three rather than naming a fourth.
-
-                    Each carries its OWN colour while inactive, because they are not
-                    interchangeable and the difference matters BEFORE you click. The palette is the
-                    one already in this toolbar, used for what it already means here: mint for the
-                    sound default, violet for the weighted variant (λ is a violet-strip glyph in
-                    this app), soft coral for LIVE - the one that flatters the past and should read
-                    as a caution - sky for the ❄, and amber for CORE, matching the RATE button
-                    beside it.
-
-                    Active stays `accent-soft` like every other group on this row: the selected
-                    button is already obvious from its fill and does not also need its hue. */}
-                {([
-                  { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
-                    title: "AS-OF — each replayed day is judged ONLY by trades dated before it, recomputed from the published trade log. No look-ahead, and a day's result never changes again. Default." },
-                  { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
-                    title: "AS-OF exponential - the same situations AS-OF counts, rated differently. Sessions are grouped into blocks of 5; every trade inside a block weighs the same, and each block back from the replayed day weighs half as much every 4 blocks (1.00 / 0.84 / 0.71 / 0.59 / 0.50 / ... ~0.13 at three months). Fresh weeks carry the rate; the situation count, MINTOTAL and the evidence needed for gamma are untouched, and the day's own result never leaks in." },
-                  { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
-                    title: "LIVE — TODAY's ratings applied to every replayed day. Answers 'what would today's knowledge have done' — and is why a losing day can later show as positive. Not a record of what happened." },
-                ] as const).map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    title={m.title}
-                    onClick={() => setOpgReversalRatingsMode(m.key)}
-                    className={clsx(
-                      "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                      opgReversalRatingsMode === m.key
-                        ? "accent-soft"
-                        : clsx("border-transparent hover:bg-white/5", m.tone)
-                    )}
-                  >
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* A SECOND capsule, not a continuation of the first - the four on the left are one
-                  exclusive choice, CORE is an independent switch. One container per group, per the
-                  Secondary Button Standard (AGENTS.md). */}
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-                {/* FROZEN. A snowflake rather than a word because it qualifies the three modes to
-                    its left rather than naming a fourth one - a label here would read as their
-                    sibling, which is the confusion that made it a mode in the first place. */}
-                <button
-                  type="button"
-                  onClick={() => setOpgReversalFrozen((v) => !v)}
-                  title={opgReversalFrozen
-                    ? "FROZEN on - every day is judged as of ITSELF. LIVE reads the snapshot taken that morning; ASOF and EXPO cut the trade log at each day, so nothing a day could not have known reaches it. Click for one table over the whole range."
-                    : "FROZEN off - one table for the whole range. LIVE is today's published file, ASOF the whole trade log, EXPO the whole log weighted toward its newest session. Click to measure each day as of itself."}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[11px] font-mono font-bold leading-none transition-all border",
-                    opgReversalFrozen
-                      ? "border-sky-400/70 bg-sky-500/15 text-sky-200"
-                      : "border-transparent text-sky-300/70 hover:text-sky-200 hover:bg-white/5"
-                  )}
-                  aria-label="Frozen: judge each day as of itself"
-                >
-                  ❄
-                </button>
-
-                {/* CORE, not in a capsule of its own (the operator's
-                    own correction, 2026-11-08 - "не роздільно"). It belongs here visually because
-                    it belongs here logically: it narrows the very table the four buttons to its
-                    left choose between.
-
-                    No divider before it, deliberately. AGENTS.md's unit-strip standard is explicit
-                    that a separator between sub-groups inside one strip is our own invention and
-                    not the pattern - the differing semantics (four exclusive modes, then one
-                    independent on/off) are carried by the active styling, not by a rule.
-
-                    Same pill classes as its neighbours so the row reads as one control. */}
-                <button
-                  type="button"
-                  onClick={() => setOpgReversalCoreOnly((v) => !v)}
-                  title={opgReversalCoreOnly
-                    ? "CORE on - only the consistently-good tickers (depth + breadth + positive in every trailing window + shrunk LB > 0, sticky once in), rebuilt as of each day. NOTE: measured on 65 sessions this list showed NO edge - per-ticker persistence is corr +0.006 and tighter screening came out worse. The stability is real, the edge is not. Click for the full universe."
-                    : "CORE off - every ticker the rating mode admits. Click to restrict to the consistently-good list of tickers that have performed well CONSISTENTLY, not merely on average."}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    // A TOGGLE, not one of the four to its left. Its "on" state is deliberately a
-                    // different SHAPE of highlight - its own hue as a ring and tint, rather than
-                    // accent-soft's solid fill - because the strip holds two kinds of control and
-                    // only the colour can say so. Without this all six look like one radio group and
-                    // "LIVE + CORE + NRRW lit at once" reads as a bug instead of as three answers to
-                    // three questions.
-                    opgReversalCoreOnly
-                      ? "border-amber-400/70 bg-amber-500/15 text-amber-200"
-                      : "border-transparent text-amber-300/80 hover:text-amber-200 hover:bg-white/5"
-                  )}
-                >
-                  CORE
-                </button>
-              </div>
-              </>
+            <RatingModeMenu
+              mode={opgReversalRatingsMode}
+              setMode={setOpgReversalRatingsMode}
+              frozen={opgReversalFrozen}
+              setFrozen={setOpgReversalFrozen}
+              core={opgReversalCoreOnly}
+              setCore={setOpgReversalCoreOnly}
+            />
           )}
 
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
@@ -6160,85 +6150,88 @@ export default function OPGReversalScanner({
               Standard's colored per-role boxes, per the user's own correction). This used to be an
               ALL/TOP toggle + ρ/β/σ range boxes reading arbitrageTickerMetaByTicker — Arbitrage's OWN
               corr/beta/sigma, wrong data entirely for a OPGReversal ticker (OPGReversal has no corr/beta
-              concept at all) — removed. Grayed out (not disabled — still editable, since RATE can be
-              flipped back on at any time) while RATE/UNIVERSE reads UNIVERSE, since the bridge drops
-              both floors under ignoreRatings regardless of what is typed into them. */}
-          <div className={clsx(
-            "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-            opgReversalIgnoreRatings && "opacity-40"
-          )} title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
-            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="number"
-                inputMode="decimal"
-                step={5}
-                min={0}
-                max={100}
-                value={ratePctFromFraction(opgReversalMinRate)}
-                onChange={(e) => setOPGReversalMinRate(ratePctToFraction(e.target.value))}
-                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-              />
-              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Increase min rate"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
-                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Decrease min rate"
-                >
-                  ▼
-                </button>
+              concept at all) — removed. HIDDEN while RATE is off (2026-11-22, the operator's own instruction;
+              they were grayed out before): the bridge drops both floors under ignoreRatings regardless of
+              what is typed into them, so a visible box that cannot do anything is worse than no box. The
+              values are kept in state and come back with RATE. */}
+          {!opgReversalIgnoreRatings && (
+            <>
+            <div className={clsx(
+              "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45"
+            )} title="Floor on the matched (class, sign) cell's own published win_rate (0-1). 0 = off.">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step={5}
+                  min={0}
+                  max={100}
+                  value={ratePctFromFraction(opgReversalMinRate)}
+                  onChange={(e) => setOPGReversalMinRate(ratePctToFraction(e.target.value))}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v + 0.05).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min rate"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOPGReversalMinRate((v) => Math.max(0, +(v - 0.05).toFixed(4)))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min rate"
+                  >
+                    ▼
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className={clsx(
-            "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
-            opgReversalIgnoreRatings && "opacity-40"
-          )} title="Floor on the matched cell's own published total trade count (not GammaN — see OPGReversalGate.cs). 0 = off.">
-            <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
-            <div className="group relative h-7 w-14 overflow-hidden rounded-md">
-              <input
-                type="number"
-                inputMode="numeric"
-                step={1}
-                min={0}
-                value={opgReversalMinTotal}
-                onChange={(e) => setOPGReversalMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
-              />
-              <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v + 1))}
-                  className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Increase min total"
-                >
-                  ▲
-                </button>
-                <button
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v - 1))}
-                  className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
-                  aria-label="Decrease min total"
-                >
-                  ▼
-                </button>
+            <div className={clsx(
+              "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45"
+            )} title="Floor on the matched cell's own published total trade count (not GammaN — see OPGReversalGate.cs). 0 = off.">
+              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
+              <div className="group relative h-7 w-14 overflow-hidden rounded-md">
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  step={1}
+                  min={0}
+                  value={opgReversalMinTotal}
+                  onChange={(e) => setOPGReversalMinTotal(Math.max(0, clampInt(e.target.value, 0)))}
+                  className="center-spin w-full h-7 bg-transparent border-0 !pl-2 !pr-5 text-[11px] font-mono tabular-nums text-center text-zinc-200 placeholder-zinc-700 focus:outline-none focus:bg-black/10 transition-all active:scale-[0.99]"
+                />
+                <div className="absolute right-0 top-0 bottom-0 w-4 border-l border-white/10 bg-transparent flex flex-col opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v + 1))}
+                    className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Increase min total"
+                  >
+                    ▲
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => setOPGReversalMinTotal((v) => Math.max(0, v - 1))}
+                    className="flex flex-1 items-center justify-center border-t border-white/5 text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors"
+                    aria-label="Decrease min total"
+                  >
+                    ▼
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
+            </>
+          )}
 
           {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with OPGReversal's OWN static
               values (not Arbitrage's arbitrageTickerMetaByTicker corr/beta/sigma the old ρ/β/σ read).
@@ -6248,7 +6241,23 @@ export default function OPGReversalScanner({
               (rides Rating, same slot the table's own γ column reads). These are a DIFFERENT kind of
               filter than MINRATE/MINTOTAL above: a floor/ceiling on a STATIC published value, not a
               threshold on the trade's own win_rate. */}
-          {[
+          <button
+            type="button"
+            onClick={toggleStats}
+            aria-pressed={statsOn}
+            title={statsOn
+              ? "STATS on — the σ / α / γ min-max boxes are shown and applied: floors/ceilings on the ticker's published static sigma, alpha, and the gamma level a row cleared. Click to hide them: the boxes disappear AND stop filtering (your values are kept and come back)."
+              : "STATS off — the σ / α / γ boxes are hidden and nothing is filtered by them. Click to bring them back with your last values."}
+            className={clsx(
+              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
+              statsOn
+                ? "bg-sky-500 text-black shadow-[0_0_16px_rgba(14,165,233,0.36)]"
+                : "bg-black/20 text-zinc-400 hover:bg-white/5 hover:text-white"
+            )}
+          >
+            STATS
+          </button>
+          {statsOn && [
             { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
             { label: "α", title: "Alpha — the ticker's own modal |9:20-9:25 reading|, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
             { label: "γ", title: "Gamma — the (class, sign) opgReversal-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
@@ -6320,184 +6329,36 @@ export default function OPGReversalScanner({
         </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          
-            <div className="flex h-7 items-center gap-2">
-              {[
-                ...OPGREVERSAL_EXIT_CLASSES,
-              ].map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => setOPGReversalExitClass(b.key as "exit0945" | "exit1000" | "exit1030")}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    opgReversalExitClass === b.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {b.label}
-                </button>
-                ))}
-            </div>
-
-            <div className="flex-1" />
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
-              {scannerPresetSaveMode ? (
-                <input
-                  type="text"
-                  value={scannerPresetDraftName}
-                  onChange={(e) => setScannerPresetDraftName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setScannerPresetSaveMode(false);
-                      setScannerPresetDraftName("");
-                    }
-                  }}
-                  autoFocus
-                  placeholder="NAME..."
-                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
-                />
-              ) : (
-                <GlassSelect
-                  value={scannerPresetId}
-                  onChange={async (e) => {
-                    const nextId = e.target.value;
-                    setScannerPresetId(nextId);
-                    if (!nextId) {
-                      clearScannerSharedFilters();
-                      return;
-                    }
-                    if (scannerPresetBusy || scannerPresetSaveMode) return;
-                    setScannerPresetBusy(true);
-                    try {
-                      const preset = getSharedFilterLocalPreset(nextId);
-                      if (preset && applyScannerPreset(preset)) return;
-                      const fallbackPreset = scannerPresets.find((x) => x.id === nextId);
-                      if (fallbackPreset && applyScannerPreset(fallbackPreset)) return;
-                      setScannerPresetStatus("Apply failed");
-                    } catch {
-                      setScannerPresetStatus("Apply failed");
-                    } finally {
-                      setScannerPresetBusy(false);
-                    }
-                  }}
-                  options={[
-                    { value: "", label: "NONE" },
-                    ...scannerPresets.map((preset) => ({
-                      value: preset.id,
-                      label: preset.name.toUpperCase(),
-                    })),
-                  ]}
-                  compact
-                  panelOffsetX={-42}
-                  panelWidth={124}
-                  className="w-[92px] !h-7 !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                />
-              )}
+        {/* Same compact wrapper as the filter groups and the execution card (the operator's own instruction, 2026-11-22):
+            p-0.5 (3px from the h-7 controls with the border) and rounded-xl instead of p-3 / rounded-2xl. */}
+        <ScannerControlCard
+          filters={scannerFilters}
+          presetId={scannerPresetId}
+          setPresetId={setScannerPresetId}
+          saveCurrentScannerPreset={saveCurrentScannerPreset}
+          applyScannerPreset={applyScannerPreset}
+          clearScannerSharedFilters={clearScannerSharedFilters}
+        >
+          <div className="flex h-7 items-center gap-2">
+            {[
+              ...OPGREVERSAL_EXIT_CLASSES,
+            ].map((b) => (
               <button
+                key={b.key}
                 type="button"
-                onClick={() => {
-                  if (scannerPresetSaveMode) {
-                    if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    return;
-                  }
-                  setScannerPresetSaveMode(true);
-                  setScannerPresetDraftName("");
-                }}
-                disabled={scannerPresetBusy}
+                onClick={() => setOPGReversalExitClass(b.key as "exit0945" | "exit1000" | "exit1030")}
                 className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetBusy
-                    ? "border-transparent text-zinc-600"
-                    : scannerPresetSaveMode
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  TOOLBAR_BUTTON_BASE,
+                  opgReversalExitClass === b.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
                 )}
               >
-                SAVE
+                {b.label}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode) return;
-                  const ok = deleteSharedFilterLocalPreset(scannerPresetId);
-                  if (!ok) {
-                    setScannerPresetStatus("Delete failed");
-                    return;
-                  }
-                  const items = listSharedFilterLocalPresets().filter((x) => {
-                    if (x.scope !== "BOTH") return false;
-                    try {
-                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
-                    } catch {
-                      return false;
-                    }
-                  });
-                  setScannerPresets(items);
-                  setScannerPresetId(items[0]?.id ?? "");
-                  setScannerPresetStatus("Deleted");
-                }}
-                disabled={!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetId && !scannerPresetBusy && !scannerPresetSaveMode
-                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
-                    : "border-transparent text-zinc-600"
-                )}
-              >
-                DEL
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowSharedMinMax((v) => !v)}
-              className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
-              title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
-            >
-              {showSharedMinMax ? (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="group-hover:text-rose-400 transition-colors"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              )}
-            </button>
-        </div>
+              ))}
+          </div>
+        </ScannerControlCard>
 
         {showSharedMinMax && (
           <SharedMinMaxPanel
@@ -6522,6 +6383,20 @@ export default function OPGReversalScanner({
           filteredEpisodes={filteredEpisodes}
           downloadEpisodesLog={downloadEpisodesLog}
           downloadStreamFilterPassLog={downloadStreamFilterPassLog}
+          // The five two-option pairs as icons with tooltips (the operator's own instruction, 2026-11-22).
+          // The general ACTIVE/PASSIVE and HEDGED wording is wrong for THIS strategy, so those two say so:
+          // see OPGReversalCloseMode in TapeOPGReversalModels.cs ("genuinely INERT" - the entry is anchored
+          // on the gap for every exit class) and PaperOPGReversalController ("never populates a hedge leg").
+          iconMode
+          iconTitles={{
+            Active: "ACTIVE — has NO effect on OPG Reversal: the entry is anchored on the opening gap and the exit on the end of the class window whichever is chosen (kept for toolbar parity with the other scanners).",
+            Passive: "PASSIVE — has NO effect on OPG Reversal: the entry is anchored on the opening gap and the exit on the end of the class window whichever is chosen (kept for toolbar parity with the other scanners).",
+            Hedged: "HEDGED — on OPG Reversal this is the same number as RAWONLY: the strategy never opens a benchmark hedge leg, so there is nothing to add.",
+            LastPrint: "PRINT — the raw last-print move vs the last close (Stack%) prices the signal, the entry and the exit.",
+            BidAsk: "BIDASK — the side-appropriate quote instead of the print, for the signal AND the fills: a long buys the Ask and sells the Bid, a short sells the Bid and buys back the Ask (the same rule Arbitrage uses).",
+            Diluted: "DILUTED — has NO effect on OPG Reversal: the strategy opens one position per ticker and never scales into it, so STEP, MAXADD and DELAY have nothing to control (the engine has no dilution ladder).",
+            Undiluted: "UNDILUTED — OPG Reversal always works this way: one entry per position, no adds. The DILUTED/UNDILUTED switch is kept for toolbar parity with the other scanners and changes nothing here.",
+          }}
         />
 
           {/* Shared with both Sonars and Stream — see components/shared/filters/FilterFlagsRow.
@@ -6611,7 +6486,7 @@ export default function OPGReversalScanner({
                   POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
                   startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
                   first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
-              <div className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-violet-500/20 bg-violet-500/[0.06]">
+              <div className="inline-flex items-center gap-2 rounded-xl border p-0.5 border-violet-500/20 bg-violet-500/[0.06]">
                 {([
                   { key: "pct", label: "%", title: "Raw Stack% points (default) — SHORT/LONG/MAX entered as flat percentage points", disabled: false },
                   { key: "sigma", label: "σ", title: "SHORT/LONG/MAX entered as a multiple of each ticker's own published static sigma — resolved per ticker server-side", disabled: false },
@@ -6642,7 +6517,7 @@ export default function OPGReversalScanner({
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry), entered in ${opgReversalThresholdUnitLabel}. Coral = short.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-[#f3a6b2]/50" title={`Floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry), entered in ${opgReversalThresholdUnitLabel}. Coral = short.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6650,7 +6525,7 @@ export default function OPGReversalScanner({
                     min={0}
                     value={opgReversalMinDevAbsShort}
                     onChange={(e) => setOPGReversalMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6673,7 +6548,7 @@ export default function OPGReversalScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry), entered in ${opgReversalThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-[#6ee7b7]/45" title={`Floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry), entered in ${opgReversalThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6682,7 +6557,7 @@ export default function OPGReversalScanner({
                     value={opgReversalMinDevAbsLong}
                     onChange={(e) => setOPGReversalMinDevAbsLong(e.target.value)}
                     placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6711,7 +6586,7 @@ export default function OPGReversalScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |9:20-9:25 deviation|, either side (empty = none), entered in ${opgReversalThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-zinc-200/35" title={`Upper cap on |9:20-9:25 deviation|, either side (empty = none), entered in ${opgReversalThresholdUnitLabel}: a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6720,7 +6595,7 @@ export default function OPGReversalScanner({
                     value={opgReversalMinDevAbsMax}
                     onChange={(e) => setOPGReversalMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6743,7 +6618,7 @@ export default function OPGReversalScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
+                <div className="group relative h-7 w-14 rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
                   <input
                     type="number"
                     inputMode="numeric"
@@ -6751,7 +6626,7 @@ export default function OPGReversalScanner({
                     min={0}
                     value={opgReversalMinGammaTotal}
                     onChange={(e) => setOPGReversalMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6783,7 +6658,7 @@ export default function OPGReversalScanner({
             Wrapped at order-1 so it lands in the same band as the filter row above it: the column
             lays out by `order`, not by source, and at the default order-0 this strip floated to
             the top of the column, above the filters. */}
-        <div className="order-1">
+        <div className="order-3">
             <ActiveTickerCard
               ticker={activeSelection.ticker ?? null}
               stats={activeCardStats}
@@ -6804,7 +6679,7 @@ export default function OPGReversalScanner({
         <div className="flex items-center justify-between gap-2">
           {!isStreamOnlyShell && (
             <div className="flex items-center gap-2">
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {[
                   { key: "day", label: "DAY" },
                   { key: "last", label: "LAST" },
@@ -6855,7 +6730,7 @@ export default function OPGReversalScanner({
                   </button>
                 ))}
               </div>
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {dateMode === "day" ? (
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
@@ -6877,7 +6752,7 @@ export default function OPGReversalScanner({
                   <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
+                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d")}
                       options={[
                         { value: "3d", label: "3 DAYS" },
                         { value: "5d", label: "5 DAYS" },
@@ -6885,6 +6760,8 @@ export default function OPGReversalScanner({
                         { value: "15d", label: "15 DAYS" },
                         { value: "20d", label: "20 DAYS" },
                         { value: "30d", label: "30 DAYS" },
+                        { value: "60d", label: "60 DAYS" },
+                        { value: "90d", label: "90 DAYS" },
                       ]}
                       className="!inline-flex !w-[90px] !min-w-[90px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={110}
@@ -6937,7 +6814,9 @@ export default function OPGReversalScanner({
           <div className="flex items-center gap-2">
           {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
+              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>{analyticsSummary.dayCount > 0 && (
+                <> | <span className="text-zinc-200">{intn(analyticsSummary.dayCount)} {analyticsSummary.dayCount === 1 ? "day" : "days"}</span></>
+              )}
             </div>
           )}
           </div>
@@ -7108,7 +6987,7 @@ export default function OPGReversalScanner({
           <div className="space-y-3">
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. */}
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,3.94fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
@@ -7131,7 +7010,7 @@ export default function OPGReversalScanner({
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
                   no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
                   enough to wrap at a normal width. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 {/* 1 — counts */}
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
@@ -7212,7 +7091,7 @@ export default function OPGReversalScanner({
                 {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={
@@ -8796,9 +8675,6 @@ export default function OPGReversalScanner({
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                OPG•REVERSAL SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {opgReversalExitClass} exit
-              </div>
               {opgReversalSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
               {opgReversalSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{opgReversalSnapshotError}</span>}
             </div>
@@ -8812,7 +8688,7 @@ export default function OPGReversalScanner({
                 ever showed a subset of what was already being computed one scroll down for the
                 equity curve. */}
             <div className="flex flex-col xl:flex-row gap-3">
-              <div className="w-full xl:w-[220px] xl:flex-shrink-0">
+              <div className="w-full xl:w-[calc(220px_+_(100%_-_328px)_*_0.0741)] xl:flex-shrink-0">
                 <SummaryMetricCard
                   label="TOTAL PNL ($)"
                   value={num(analyticsSummary.totalPnlUsd, 2)}
@@ -8830,7 +8706,7 @@ export default function OPGReversalScanner({
                 />
               </div>
               {/* Nine columns of two, filled column by column — same layout ArbitrageScanner uses. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
 
@@ -8889,7 +8765,7 @@ export default function OPGReversalScanner({
 
                 <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(analyticsSummary.profitFactor) ? num(analyticsSummary.profitFactor, 2) : "∞"} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={

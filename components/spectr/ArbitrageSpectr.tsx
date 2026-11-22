@@ -546,7 +546,7 @@ export default function ArbitrageSpectr() {
                 );
               })}
 
-              <div className={clsx("group relative w-[78px] rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Coral = short (placeholder, no scan on Spectr).">
+              <div className={clsx("group relative w-14 rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Coral = short (placeholder, no scan on Spectr).">
                 <input
                   type="number"
                   step={0.1}
@@ -561,7 +561,7 @@ export default function ArbitrageSpectr() {
                   <button type="button" disabled={zapMode === "off"} onMouseDown={(e) => e.preventDefault()} onClick={() => setStartAbs((v) => Math.max(0.1, +(v - 0.05).toFixed(4)))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40">▼</button>
                 </div>
               </div>
-              <div className={clsx("group relative w-[78px] rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Mint = long (placeholder, no scan on Spectr).">
+              <div className={clsx("group relative w-14 rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Mint = long (placeholder, no scan on Spectr).">
                 <input
                   type="number"
                   step={0.1}
@@ -577,7 +577,7 @@ export default function ArbitrageSpectr() {
                   <button type="button" disabled={zapMode === "off"} onMouseDown={(e) => e.preventDefault()} onClick={() => setStartAbsNeg((prev) => String(Math.max(0.1, +((Number(prev) || startAbs) - 0.1).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40">▼</button>
                 </div>
               </div>
-              <div className={clsx("group relative w-[78px] rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Silver = the ceiling (placeholder, no scan on Spectr).">
+              <div className={clsx("group relative w-14 rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Silver = the ceiling (placeholder, no scan on Spectr).">
                 <input
                   type="number"
                   step={0.1}
@@ -593,7 +593,7 @@ export default function ArbitrageSpectr() {
                   <button type="button" disabled={zapMode === "off"} onMouseDown={(e) => e.preventDefault()} onClick={() => setStartAbsMax((prev) => String(Math.max(0, +((Number(prev) || 0) - 0.1).toFixed(4))))} className="flex flex-1 items-center justify-center text-[8px] leading-none text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5 disabled:opacity-40">▼</button>
                 </div>
               </div>
-              <div className={clsx("group relative w-[78px] rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Gold = the exit (placeholder, no scan on Spectr).">
+              <div className={clsx("group relative w-14 rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Gold = the exit (placeholder, no scan on Spectr).">
                 <input
                   type="number"
                   step={0.05}

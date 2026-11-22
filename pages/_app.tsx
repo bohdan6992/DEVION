@@ -12,6 +12,7 @@ import "@/styles/globals.css";
 import { useAutoScale } from "@/hooks/useAutoScale";
 import UiProvider from "@/components/UiProvider";
 import AppThemeBackground from "@/components/theme/AppThemeBackground";
+import GlobalTooltip from "@/components/ui/GlobalTooltip";
 
 import { SifterProvider } from "@/components/sifter/SifterProvider";
 import { SifterDock } from "@/components/sifter/SifterDock";
@@ -121,6 +122,8 @@ export default function MyApp({
             </div>
             {/* Outside #app-scale so position:fixed is viewport-relative */}
             <PageScrollbar />
+            {/* One dark tooltip for every `title=` in the app (see the component's own comment). */}
+            <GlobalTooltip />
           </SifterProvider>
         </UiProvider>
       )}

@@ -4357,7 +4357,7 @@ export default function OPGRideSonar() {
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Flat floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry). Coral = short.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#f3a6b2]/50" title="Flat floor on |9:20-9:25 deviation| for a POSITIVE reading (a SHORT entry). Coral = short.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4365,7 +4365,7 @@ export default function OPGRideSonar() {
                     min={0}
                     value={opgRideMinDevAbsShort}
                     onChange={(e) => setOPGRideMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4388,7 +4388,7 @@ export default function OPGRideSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Flat floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#6ee7b7]/45" title="Flat floor on |9:20-9:25 deviation| for a NEGATIVE reading (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4397,7 +4397,7 @@ export default function OPGRideSonar() {
                     value={opgRideMinDevAbsLong}
                     onChange={(e) => setOPGRideMinDevAbsLong(e.target.value)}
                     placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4426,7 +4426,7 @@ export default function OPGRideSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on |9:20-9:25 deviation|, either side (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
+                <div className="group relative h-7 w-14 rounded-md border border-zinc-200/35" title="Upper cap on |9:20-9:25 deviation|, either side (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4435,7 +4435,7 @@ export default function OPGRideSonar() {
                     value={opgRideMinDevAbsMax}
                     onChange={(e) => setOPGRideMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4458,7 +4458,7 @@ export default function OPGRideSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
+                <div className="group relative h-7 w-14 rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
                   <input
                     type="number"
                     inputMode="numeric"
@@ -4466,7 +4466,7 @@ export default function OPGRideSonar() {
                     min={0}
                     value={opgRideMinGammaTotal}
                     onChange={(e) => setOPGRideMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button

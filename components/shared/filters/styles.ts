@@ -6,7 +6,7 @@
  * surface at once, which is the whole point of the shared row.
  */
 
-export const FILTER_GROUP_BASE = "inline-flex items-center gap-2 rounded-xl border p-1.5";
+export const FILTER_GROUP_BASE = "inline-flex items-center gap-2 rounded-xl border p-0.5";
 
 export const FILTER_PILL =
   "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all";

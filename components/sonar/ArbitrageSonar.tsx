@@ -4587,7 +4587,7 @@ export default function ArbitrageSonar() {
               </button>
 
               {/* 1) SHORT start: a positive deviation (coral) */}
-              <div className={clsx("group relative w-[78px] rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
+              <div className={clsx("group relative w-14 rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
                 <input
                   type="number"
                   step={zapMode === "zap" ? 0.1 : 0.05}
@@ -4626,7 +4626,7 @@ export default function ArbitrageSonar() {
               </div>
 
               {/* 2) LONG start: a negative deviation (mint); empty = the same as the short one */}
-              <div className={clsx("group relative w-[78px] rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
+              <div className={clsx("group relative w-14 rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a LONG entry). Empty = the same threshold as the short one. Mint = long.">
                 <input
                   type="number"
                   step={zapMode === "zap" ? 0.1 : 0.05}
@@ -4662,7 +4662,7 @@ export default function ArbitrageSonar() {
               </div>
 
               {/* 3) MAX = SILVER: too stretched (silver) */}
-              <div className={clsx("group relative w-[78px] rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound (silver): a signal whose deviation is at or above this is highlighted silver as too stretched (active and inactive).">
+              <div className={clsx("group relative w-14 rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound (silver): a signal whose deviation is at or above this is highlighted silver as too stretched (active and inactive).">
                 <input
                   type="number"
                   step={zapMode === "sigma" ? 0.1 : 0.5}
@@ -4698,7 +4698,7 @@ export default function ArbitrageSonar() {
               </div>
 
               {/* 4) EXIT = GOLD: normalisation of an ACTIVE position (gold) */}
-              <div className={clsx("group relative w-[78px] rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold (gold): an ACTIVE position whose deviation has fallen back to this or below is highlighted gold - time to exit.">
+              <div className={clsx("group relative w-14 rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold (gold): an ACTIVE position whose deviation has fallen back to this or below is highlighted gold - time to exit.">
                 <input
                   type="number"
                   step={zapMode === "sigma" ? 0.05 : 0.1}

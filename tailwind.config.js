@@ -7,6 +7,9 @@ export default {
     "./pages/**/*.{js,ts,jsx,tsx}",
     "./components/**/*.{js,ts,jsx,tsx}",
     "./app/**/*.{js,ts,jsx,tsx}",
+    // The market-type pills/tooltips take their colour classes from this data file (one hue per type);
+    // outside `components/` Tailwind would never see them and the border/shadow would silently not exist.
+    "./lib/marketType.ts",
   ],
 
   theme: {

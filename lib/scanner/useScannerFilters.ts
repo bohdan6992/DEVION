@@ -71,7 +71,7 @@ export function useScannerFilters(
   const [dateNy, setDateNy] = useState<string>(todayNyYmd());
   const [dateFrom, setDateFrom] = useState<string>(todayNyYmd());
   const [dateTo, setDateTo] = useState<string>(todayNyYmd());
-  const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">("5d");
+  const [rangePreset, setRangePreset] = useState<"3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d">("5d");
   const [internalSession, setInternalSessionRaw] = useState<PaperArbSession>(defaultSession);
   /**
    * Refuses a session the strategy has no ratings for.

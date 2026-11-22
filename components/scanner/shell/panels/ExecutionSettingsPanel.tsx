@@ -1,6 +1,5 @@
 import React from "react";
 import clsx from "clsx";
-import { GlassCard } from "../../shared/ui";
 import { IDENTITY_YELLOW_HEX, SCANNER_CORAL_HEX, SCANNER_MINT_HEX } from "../../shared/styles";
 import { clampInt, formatDilutionStepValue, formatScannerSizeValue, normalizeScannerSizeValue, stepDilutionStepValue, stepScannerSizeValue } from "../../../../lib/scanner/format";
 import type { ScannerFilterBag } from "../../../../lib/scanner/filterState";
@@ -45,12 +44,106 @@ const PRICE_MODE_LIVE_TITLE =
   "(F3/F4 before 04:00 NY), no Ctrl. BIDASK measures bid/ask per side and sends Ctrl+F1/F2.";
 
 const backtestOnlyGroupClass = (isStreamOnlyShell: boolean, extra?: string) =>
-  clsx("flex h-7 items-center rounded-lg bg-black/20", extra, isStreamOnlyShell && "opacity-50");
+  clsx("flex h-7 items-center rounded-lg bg-black/45", extra, isStreamOnlyShell && "opacity-50");
 
 /** Strategy has no add/dilution ladder at all (e.g. SPREADOMETR's blind one-shot basket) — the
  * DILUTED/UNDILUTED toggle and its three steppers grey out unconditionally, never just by mode. */
 const DILUTION_UNSUPPORTED_TITLE =
   "This strategy has no add/dilution ladder — it never scales into a position, so there is nothing for DILUTED, STEP, MAXADD or DELAY to control.";
+
+const PAIR_SVG = {
+  "aria-hidden": true as const,
+  width: "14",
+  height: "14",
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: "2",
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+};
+
+/**
+ * ICON MODE (the operator's own instruction, 2026-11-22, for the OPG Reversal scanner): the pairs
+ * below draw a line icon per option instead of ACTIVE/PASSIVE-style words, with the meaning in the
+ * tooltip. ON by default for every scanner (the operator, 2026-11-22: "завжди однакова"); pass `iconMode={false}` to get the words back.
+ * Option keys are unique across the five pairs, so one table covers all of them.
+ *
+ * The tooltips say what the option does in GENERAL; a scanner for which an option is inert or
+ * different overrides it with `iconTitles` (OPG Reversal does, for ACTIVE/PASSIVE).
+ */
+const PAIR_ICONS: Record<string, { icon: React.ReactNode; title: string }> = {
+  Active: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" /></svg>
+    ),
+    title:
+      "ACTIVE — a position is closed at the live market: the exit is marked at the prices actually there when the exit minute arrives.",
+  },
+  Passive: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="M6 2h12M6 22h12M7 2v4l5 6-5 6v4M17 2v4l-5 6 5 6v4" /></svg>
+    ),
+    title:
+      "PASSIVE — a position waits to be closed rather than crossing the spread: where the strategy supports it, the exit is marked against the opening gap instead of live prices.",
+  },
+  Hedged: {
+    icon: (
+      <svg {...PAIR_SVG}><circle cx="9" cy="12" r="5" /><circle cx="15" cy="12" r="5" /></svg>
+    ),
+    title:
+      "HEDGED — the P&L a row reports includes the benchmark hedge leg (stock leg + opposite-side benchmark leg).",
+  },
+  RawOnly: {
+    icon: (
+      <svg {...PAIR_SVG}><circle cx="12" cy="12" r="5" /></svg>
+    ),
+    title:
+      "RAWONLY — the P&L a row reports is the stock leg alone, with no benchmark hedge.",
+  },
+  LastPrint: {
+    icon: (
+      <svg {...PAIR_SVG}><circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="2.2" /></svg>
+    ),
+    title:
+      "PRINT — prices are the last trade print (the tape's last-print move vs the last close).",
+  },
+  BidAsk: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" /></svg>
+    ),
+    title:
+      "BIDASK — prices are the side-appropriate quote: the bid for a long-side mark, the ask for a short-side mark, instead of the last print.",
+  },
+  Notional: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></svg>
+    ),
+    title:
+      "USD — SIZE is a flat dollar notional per position (e.g. 1000 = $1,000 each).",
+  },
+  Tier: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="m12 2 10 5-10 5L2 7l10-5ZM2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
+    ),
+    title:
+      "TIER — SIZE is a multiplier of each ticker's own size tier (tier basis points x SIZE), so liquid and thin names get different dollar sizes.",
+  },
+  Diluted: {
+    icon: (
+      <svg {...PAIR_SVG}><path d="M4 20v-4h4v4H4ZM10 20v-8h4v8h-4ZM16 20V6h4v14h-4Z" /></svg>
+    ),
+    title:
+      "DILUTED — a position may scale in: further tranches are added in rungs (STEP apart, up to MAXADD, DELAY between them).",
+  },
+  Undiluted: {
+    icon: (
+      <svg {...PAIR_SVG}><rect x="9" y="6" width="6" height="14" rx="1" /></svg>
+    ),
+    title:
+      "UNDILUTED — a single entry per position: no adds, no ladder.",
+  },
+};
 
 /**
  * A two-option toggle pair (ACTIVE/PASSIVE, HEDGED/RAWONLY, PRINT/BIDASK, USD/TIER,
@@ -58,22 +151,56 @@ const DILUTION_UNSUPPORTED_TITLE =
  * POSITION, not by identity — first option active = gold, second = silver, regardless of theme.
  * The inactive side collapses to its first two letters. Text colour is left alone (twotone-gold/
  * twotone-silver only touch background/border/shadow) — only the fill changes on toggle.
+ *
+ * With `iconMode` both sides are icons (see PAIR_ICONS): the active one keeps the same gold/silver
+ * fill, the inactive one stays muted, and the tooltip carries the meaning. `titleSuffix` is appended
+ * to every tooltip of the pair - the "backtest only" note the group wrapper used to carry on its own,
+ * which a tooltip on the button itself would otherwise hide.
  */
 function TwoTonePairButtons<T extends string>({
   options,
   active,
   onSelect,
   disabled = false,
+  iconMode = false,
+  iconTitles,
+  titleSuffix,
 }: {
   options: readonly [{ key: T; label: string }, { key: T; label: string }];
   active: T;
   onSelect: (key: T) => void;
   disabled?: boolean;
+  iconMode?: boolean;
+  iconTitles?: Partial<Record<string, string>>;
+  titleSuffix?: string;
 }) {
   return (
     <>
       {options.map((m, i) => {
         const isActive = active === m.key;
+        const meta = iconMode ? PAIR_ICONS[m.key] : undefined;
+        if (meta) {
+          const base = iconTitles?.[m.key] ?? meta.title;
+          return (
+            <button
+              key={m.key}
+              type="button"
+              disabled={disabled}
+              onClick={() => onSelect(m.key)}
+              aria-pressed={isActive}
+              aria-label={m.label}
+              title={titleSuffix ? `${base}\n\n${titleSuffix}` : base}
+              className={clsx(
+                "inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg transition-all border disabled:opacity-40 disabled:cursor-not-allowed",
+                isActive
+                  ? clsx(i === 0 ? "twotone-gold" : "twotone-silver", "text-zinc-100")
+                  : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+              )}
+            >
+              {meta.icon}
+            </button>
+          );
+        }
         return (
           <button
             key={m.key}
@@ -147,6 +274,15 @@ export type ExecutionSettingsPanelProps = {
    * the other three (still backtest-only) pairs. False for every other strategy.
    */
   priceModeAffectsLive?: boolean;
+  /**
+   * Draw the five two-option pairs (ACTIVE/PASSIVE, HEDGED/RAWONLY, PRINT/BIDASK, USD/TIER, DILUTED/
+   * UNDILUTED) as icons with tooltips instead of words. Off by default, so every scanner that has not
+   * asked keeps its look. See PAIR_ICONS.
+   */
+  iconMode?: boolean;
+  /** Per-option tooltip overrides (keyed by the option's key, e.g. "Active") for a scanner where the
+   *  general wording is wrong - say, an option that is inert for that strategy. */
+  iconTitles?: Partial<Record<string, string>>;
   /**
    * PullBack only (for now): the glyph of the unit its threshold strip is currently set to - "%",
    * "σ", "α", "γ", "τ", "λ". PullBack's add STEP is scaled server-side by the same
@@ -223,7 +359,7 @@ function TimePill({
   const diverges = effClock !== null && effectiveMinutes !== typedMinutes;
 
   return (
-    <div className="relative flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/20" title={title}>
+    <div className="relative flex h-7 items-center gap-0.5 pl-2 pr-0 rounded-lg bg-black/45" title={title}>
       {diverges && effClock && (
         <div
           className="absolute -top-1.5 -right-1 z-10 flex h-3 w-3 items-center justify-center rounded-full bg-amber-500 text-[7px] font-bold text-black"
@@ -311,7 +447,7 @@ const SAVE_MODE_TITLE =
 
 export function SaveModeButton({ saveMode }: { saveMode: SaveModeControl }) {
   return (
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20" title={SAVE_MODE_TITLE}>
+    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/45" title={SAVE_MODE_TITLE}>
       <button
         type="button"
         aria-pressed={saveMode.enabled}
@@ -347,6 +483,8 @@ export default function ExecutionSettingsPanel({
   downloadEpisodesLog,
   downloadStreamFilterPassLog,
   priceModeAffectsLive = false,
+  iconMode = true,
+  iconTitles,
   dilutionStepUnitLabel,
   dilutionSupported = true,
   extraControls,
@@ -383,10 +521,13 @@ export default function ExecutionSettingsPanel({
   // this one never lifts just because DILUTED happens to be selected.
   const dilutionFieldsDisabled = !dilutionSupported || dilutionMode !== "Diluted";
 
+  // The wrapper is back, in the IDLE badge's own surface (rounded border-white/10 bg-white/5) instead of the dark
+  // GlassCard it had (the operator's own instruction, 2026-11-22: "обгортку як на фоні 2"). p-0.5 around the h-7
+  // groups, rounded-xl, so it is the same 34px strip as every other toolbar row.
   return (
-<GlassCard className="order-2 p-3">
+<div className="order-2 rounded-xl border border-white/10 bg-white/5 p-0.5">
   <div className="flex flex-wrap items-center gap-3">
-    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/20">
+    <div className="flex h-7 items-center gap-0.5 rounded-lg bg-black/45">
       <TwoTonePairButtons
         options={[
           { key: "Active", label: "ACTIVE" },
@@ -394,6 +535,8 @@ export default function ExecutionSettingsPanel({
         ] as const}
         active={closeMode}
         onSelect={(key) => setCloseMode(key as PaperArbCloseMode)}
+        iconMode={iconMode}
+        iconTitles={iconTitles}
       />
     </div>
 
@@ -405,6 +548,9 @@ export default function ExecutionSettingsPanel({
         ] as const}
         active={pnlMode}
         onSelect={(key) => setPnlMode(key as PaperArbPnlMode)}
+        iconMode={iconMode}
+        iconTitles={iconTitles}
+        titleSuffix={BACKTEST_ONLY_TITLE}
       />
     </div>
 
@@ -419,6 +565,9 @@ export default function ExecutionSettingsPanel({
         ] as const}
         active={priceMode}
         onSelect={(key) => setPriceMode(key as PaperArbPriceMode)}
+        iconMode={iconMode}
+        iconTitles={iconTitles}
+        titleSuffix={priceModeAffectsLive ? PRICE_MODE_LIVE_TITLE : BACKTEST_ONLY_TITLE}
       />
     </div>
 
@@ -438,6 +587,9 @@ export default function ExecutionSettingsPanel({
               : normalizeScannerSizeValue(nextMode, current)
           );
         }}
+        iconMode={iconMode}
+        iconTitles={iconTitles}
+        titleSuffix={BACKTEST_ONLY_TITLE}
       />
     </div>
 
@@ -479,7 +631,7 @@ export default function ExecutionSettingsPanel({
     </div>
 
     <div
-      className={clsx("flex h-7 items-center gap-0.5 rounded-lg bg-black/20", !dilutionSupported && "opacity-50")}
+      className={clsx("flex h-7 items-center gap-0.5 rounded-lg bg-black/45", !dilutionSupported && "opacity-50")}
       title={dilutionSupported ? undefined : DILUTION_UNSUPPORTED_TITLE}
     >
       <TwoTonePairButtons
@@ -490,12 +642,15 @@ export default function ExecutionSettingsPanel({
         active={dilutionMode}
         onSelect={(key) => applyDilutionMode(key as PaperArbDilutionMode)}
         disabled={!dilutionSupported}
+        iconMode={iconMode}
+        iconTitles={iconTitles}
+        titleSuffix={dilutionSupported ? undefined : DILUTION_UNSUPPORTED_TITLE}
       />
     </div>
 
 
     <div
-      className={clsx("flex h-7 items-center justify-center px-1 rounded-lg bg-black/20", !dilutionSupported && "opacity-50")}
+      className={clsx("flex h-7 items-center justify-center px-1 rounded-lg bg-black/45", !dilutionSupported && "opacity-50")}
       title={!dilutionSupported
         ? DILUTION_UNSUPPORTED_TITLE
         : dilutionStepUnitLabel
@@ -546,7 +701,7 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="MAXADD — the most adds a single position may take before the ladder stops.">
+    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/45" title="MAXADD — the most adds a single position may take before the ladder stops.">
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"
@@ -587,7 +742,7 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/20" title="DELAY — minutes to wait after a rung qualifies before the add is actually sent.">
+    <div className="flex h-7 items-center justify-center px-1 rounded-lg bg-black/45" title="DELAY — minutes to wait after a rung qualifies before the add is actually sent.">
       <div className="group relative h-7 w-14 overflow-hidden rounded-md">
         <input
           type="number"
@@ -629,7 +784,7 @@ export default function ExecutionSettingsPanel({
     </div>
 
     <div
-      className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20"
+      className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/45"
       title="MINHOLD — скільки хвилин поспіль умова має триматись, щоб їй повірили. Одне й те саме число гейтить ВХІД (підтвердження розходження) і ВИХІД (підтвердження збіжності). 0 і 1 означають одне: підтверджено на самому барі, без очікування."
     >
       <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINHOLD</span>
@@ -667,7 +822,7 @@ export default function ExecutionSettingsPanel({
       </div>
     </div>
 
-    <div className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/20">
+    <div className="flex h-7 items-center gap-1 pl-2 pr-0 rounded-lg bg-black/45">
       <span className="flex h-8 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">DELAY</span>
       <div className="group relative h-8 w-11 overflow-hidden rounded-md">
         <input
@@ -804,7 +959,7 @@ export default function ExecutionSettingsPanel({
       <button
         type="button"
         onClick={downloadEpisodesLog}
-        className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/20 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
+        className="flex h-7 items-center gap-1.5 px-2.5 rounded-lg bg-black/45 text-[10px] font-mono text-zinc-400 uppercase hover:text-white hover:bg-white/5 transition-all border border-transparent"
         title={`Download ${filteredEpisodes.length} episodes as JSONL`}
       >
         ↓ LOG
@@ -880,6 +1035,6 @@ export default function ExecutionSettingsPanel({
     />
 
   </div>
-</GlassCard>
+</div>
   );
 }

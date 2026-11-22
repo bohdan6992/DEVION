@@ -143,7 +143,7 @@ export default function FilterFlagsRow({
           field, same hover-revealed steppers. A number box should not change appearance just
           because it sits in the pink group rather than the violet one.
         */}
-        <div className={`group relative w-[78px]${corr.value ? "" : " opacity-60"}`}>
+        <div className={`group relative h-7 w-[78px]${corr.value ? "" : " opacity-60"}`}>
           <input
             type="number"
             step={CORR_STEP}
@@ -153,7 +153,7 @@ export default function FilterFlagsRow({
             onChange={(e) => setCorrThresholdInput(e.target.value)}
             onBlur={() => setCorrThresholdInput(String(corrThreshold))}
             title={`|correlation| cutoff, ${SECTOR_CORR_MIN}–${SECTOR_CORR_MAX}`}
-            className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+            className="center-spin block w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
           />
           <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
             <button

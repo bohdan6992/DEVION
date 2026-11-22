@@ -456,6 +456,8 @@ export type PaperArbAnalyticsRequest = {
   excludeETF?: boolean | null;
   excludeCrap?: boolean | null;
   excludeAnom?: boolean | null;
+  /** MARKET TYPE: keep only the days of these types (null/absent = every day). See lib/marketType.ts. */
+  marketTypes?: string[] | null;
   includeUSA?: boolean | null;
   includeChina?: boolean | null;
 

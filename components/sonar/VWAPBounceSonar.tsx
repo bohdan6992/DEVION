@@ -4300,7 +4300,7 @@ export default function VWAPBounceSonar() {
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Floor on |tech_z| = |price - VWAP| / vwap_sigma: how far the price is from its own VWAP, in sigmas. Spec: 2. Coral = technical leg.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#f3a6b2]/50" title="Floor on |tech_z| = |price - VWAP| / vwap_sigma: how far the price is from its own VWAP, in sigmas. Spec: 2. Coral = technical leg.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4308,7 +4308,7 @@ export default function VWAPBounceSonar() {
                     min={0}
                     value={vwapBounceMinTechZ}
                     onChange={(e) => setVWAPBounceMinTechZ(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4331,7 +4331,7 @@ export default function VWAPBounceSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Floor on |rel_z| = (move - beta x market - beta x sector) / div_sigma: how far the stock is from what the market and its sector explain, in sigmas. Spec: 2. Mint = relative leg.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#6ee7b7]/45" title="Floor on |rel_z| = (move - beta x market - beta x sector) / div_sigma: how far the stock is from what the market and its sector explain, in sigmas. Spec: 2. Mint = relative leg.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4339,7 +4339,7 @@ export default function VWAPBounceSonar() {
                     min={0}
                     value={vwapBounceMinRelZ}
                     onChange={(e) => setVWAPBounceMinRelZ(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4362,7 +4362,7 @@ export default function VWAPBounceSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Upper cap on score = min(|tech_z|, |rel_z|) (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
+                <div className="group relative h-7 w-14 rounded-md border border-zinc-200/35" title="Upper cap on score = min(|tech_z|, |rel_z|) (empty = none): a reading beyond it is an anomalous outlier and is not taken. Silver = the ceiling.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4371,7 +4371,7 @@ export default function VWAPBounceSonar() {
                     value={vwapBounceMaxScore}
                     onChange={(e) => setVWAPBounceMaxScore(e.target.value)}
                     placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4394,7 +4394,7 @@ export default function VWAPBounceSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
+                <div className="group relative h-7 w-14 rounded-md border border-amber-400/55" title="Sample-size floor on the ticker's own published gamma (GammaN) — a gamma backed by too few historical trades does not qualify. 0 = off. Amber = the sample floor.">
                   <input
                     type="number"
                     inputMode="numeric"
@@ -4402,7 +4402,7 @@ export default function VWAPBounceSonar() {
                     min={0}
                     value={vwapBounceMinGammaTotal}
                     onChange={(e) => setVWAPBounceMinGammaTotal(Math.max(0, clampInt(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button

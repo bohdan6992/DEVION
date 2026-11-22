@@ -4196,7 +4196,7 @@ export default function LaunchEveningSonar() {
                   the ratings detail panel's own Gamma/Alpha/Sigma/ATR/Lambda rows — same helper name/
                   shape as the Scanner's own, just two display surfaces instead of one. */}
               <div
-                className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
+                className="inline-flex items-center gap-2 rounded-xl border p-0.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
                 title="Inactive. This strategy does not use the %/σ/α/γ/τ/λ switch or the floor/cap boxes: the unit is always %, there is no flat floor, and the only bound on a move is the published gamma."
               >
                 {(["%", "σ", "α", "γ", "τ", "λ"] as const).map((g) => (

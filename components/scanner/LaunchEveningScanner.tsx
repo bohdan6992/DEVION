@@ -49,7 +49,7 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
@@ -65,10 +65,15 @@ import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
-import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { useActiveTickerSelection, useActiveTickerSnapshot, useRowTickerSelect } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import ScannerControlCard from "./shell/panels/ScannerControlCard";
+import { ScannerRateButton, ScannerStatsButton, useStatsToggle } from "../shared/filters/ScannerToggleButtons";
+import { ScannerMarketControl, useMarketFilter } from "../shared/filters/ScannerMarketControl";
+import { parseMarketTypes } from "../../lib/marketType";
+import { useMarketTypeByDay } from "../../lib/scanner/useMarketTypeByDay";
 type LaunchEveningUnit = "pct" | "sigma" | "alpha" | "gamma" | "atr" | "lambda";
 
 /** Same six glyphs as the %/σ/α/γ/τ/λ unit-toggle pills (launchEveningUnitMode's own render block). */
@@ -794,6 +799,8 @@ export default function LaunchEveningScanner({
   // which PairFlux/every strategy's tape row already carry).
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
+  const { statsOn, toggleStats } = useStatsToggle({ minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma }, { minSigma: setMinSigma, maxSigma: setMaxSigma, minAlpha: setMinAlpha, maxAlpha: setMaxAlpha, minGamma: setMinGamma, maxGamma: setMaxGamma });
+  const { marketTypes, setMarketTypes, marketOn, setMarketOn } = useMarketFilter();
   // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
   // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
   // the short-side floor when the field is empty.
@@ -1384,7 +1391,7 @@ export default function LaunchEveningScanner({
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
-    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap, excludeAnom,
+    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap, excludeAnom, marketTypes, marketOn,
   ]);
 
   // ========= Preflight validation
@@ -1590,7 +1597,7 @@ export default function LaunchEveningScanner({
     return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
   }, [sortedDaysDesc, dateFrom, dateTo]);
 
-  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d") => {
     setDateMode("last");
     if (tab === "episodes") setEpisodesUseSearch(true);
     setRangePreset(preset);
@@ -1599,7 +1606,9 @@ export default function LaunchEveningScanner({
       preset === "5d" ? 5 :
       preset === "10d" ? 10 :
       preset === "15d" ? 15 :
-      preset === "20d" ? 20 : 30;
+      preset === "20d" ? 20 :
+      preset === "30d" ? 30 :
+      preset === "60d" ? 60 : 90;
     const end = sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd();
     if (!sortedDaysAsc.length) {
       setDateTo(end);
@@ -1803,7 +1812,9 @@ export default function LaunchEveningScanner({
         applyStr(s.minTierBp, setMinTierBp); applyStr(s.maxTierBp, setMaxTierBp);
         applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
-        applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
+        applyStr(s.minSigma, setMinSigma);
+        if (Array.isArray(s.marketTypes)) setMarketTypes(parseMarketTypes(s.marketTypes));
+        if (typeof s.marketOn === "boolean") setMarketOn(s.marketOn); applyStr(s.maxSigma, setMaxSigma);
         applyStr(s.minAlpha, setMinAlpha); applyStr(s.maxAlpha, setMaxAlpha);
         applyStr(s.minGamma, setMinGamma); applyStr(s.maxGamma, setMaxGamma);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
@@ -1973,6 +1984,8 @@ export default function LaunchEveningScanner({
       minBeta,
       maxBeta,
       minSigma,
+      marketTypes,
+      marketOn,
       maxSigma,
       minAlpha,
       maxAlpha,
@@ -2134,7 +2147,7 @@ export default function LaunchEveningScanner({
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
       launchEveningExitClass, launchEveningMinDevAbsShort, launchEveningMinDevAbsLong, launchEveningMinDevAbsMax, launchEveningMinGammaTotal,
-      launchEveningMinRate, launchEveningMinTotal, launchEveningUnitMode, launchEveningIgnoreRatings,
+      launchEveningMinRate, launchEveningMinTotal, launchEveningUnitMode, launchEveningIgnoreRatings, marketTypes, marketOn,
     ]
   );
 
@@ -2624,6 +2637,7 @@ export default function LaunchEveningScanner({
   );
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
   const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  useRowTickerSelect(ACTIVE_TICKER_STRATEGY);
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeCardStats = useMemo(() => {
     const f = activeSnapshot.fields ?? {};
@@ -2689,7 +2703,7 @@ export default function LaunchEveningScanner({
       if (excludeCorr && sectorCorr.excluded.has(r.ticker.toUpperCase().trim())) return false;
       return true;
     });
-  }, [streamUniverseRows, launchEveningMinRate, launchEveningMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded, streamUniversePassMinMax]);
+  }, [streamUniverseRows, launchEveningMinRate, launchEveningMinTotal, minSigma, maxSigma, minAlpha, maxAlpha, excludeCorr, sectorCorr.excluded, streamUniversePassMinMax, marketTypes, marketOn]);
 
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
     strategyModeEnabled: streamAutomationConfigOverride?.strategyModeEnabled ?? false,
@@ -2975,6 +2989,7 @@ export default function LaunchEveningScanner({
       // MINRATE/MINTOTAL/MinGammaTotal riding on it) entirely when on UNIVERSE, gating on the flat
       // floor/cap alone. Re-added 2026-09-25 (the operator's own instruction) — the earlier Γ/Ø
       // violet-strip toggle this used to be stayed removed; this is a new control in a new place.
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       ignoreRatings: launchEveningIgnoreRatings,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -3225,6 +3240,7 @@ export default function LaunchEveningScanner({
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
 
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
@@ -3761,7 +3777,7 @@ export default function LaunchEveningScanner({
     ruleBand,
     sharedRangeFilterModes,
     startAbsMax,
-    zapMode,
+    zapMode, marketTypes, marketOn,
   ]);
 
   const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
@@ -4383,7 +4399,7 @@ export default function LaunchEveningScanner({
   // (and so the raw fields it captured) has caught up.
   const rangeFilterBundle = useMemo(() => ({
     minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555]);
+  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, marketTypes, marketOn]);
   const deferredRangeFilterBundle = React.useDeferredValue(rangeFilterBundle);
 
   // ========= Client-side filters
@@ -4542,6 +4558,7 @@ export default function LaunchEveningScanner({
       return true;
     });
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   // The SNAPSHOT table predates the shared row shape and reads LaunchEvening's own field names, so
   // translate once here rather than in every cell. No bid/ask crossing and no bench leg: entry and
@@ -4705,7 +4722,7 @@ export default function LaunchEveningScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, marketTypes, marketOn]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -5119,6 +5136,7 @@ export default function LaunchEveningScanner({
             // BenchTicker to "" since LaunchEvening has no hedge leg (the same reason benchPnlUsd/
             // hedgedPnlUsd are already excluded from scope RESULTS below) — the axis could only ever
             // render one empty-string bucket, which looks exactly like a broken parameter.
+            if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
             if (catParam) catResults.push(catParam);
             return null;
           }
@@ -5188,6 +5206,7 @@ export default function LaunchEveningScanner({
         }
         // "bench" deliberately NOT built here — see the same skip's own comment above, in this
         // function's useBinRatingFilter branch.
+        if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
         if (catParam) parameterMap.set(definition.key, catParam);
         continue;
       }
@@ -6005,21 +6024,8 @@ export default function LaunchEveningScanner({
               just a single solid-colored button here instead of a pill pair: gold "RATE" while
               ratings are applied, red "UNIVERSE" once they are dropped. Sits immediately before the
               two pills it visibly governs (grayed out below when UNIVERSE is active), not after. */}
-          <button
-            type="button"
-            onClick={() => setLaunchEveningIgnoreRatings((v) => !v)}
-            title={launchEveningIgnoreRatings
-              ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone, ignoring the ticker's own published gamma and MINRATE/MINTOTAL/MinGammaTotal. Click to apply ratings again."
-              : "RATE — ratings applied: gate on the flat floor/cap AND the ticker's own published gamma, MINRATE/MINTOTAL/MinGammaTotal enforced. Click to drop ratings (UNIVERSE)."}
-            className={clsx(
-              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
-              launchEveningIgnoreRatings
-                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
-                : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
-            )}
-          >
-            {launchEveningIgnoreRatings ? "UNIVERSE" : "RATE"}
-          </button>
+          <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} />
+          <ScannerRateButton ignoreRatings={launchEveningIgnoreRatings} onToggle={() => setLaunchEveningIgnoreRatings((v) => !v)} />
 
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
               win_rate/total (LaunchEveningGate.cs), reaching LaunchEveningGate.Check via buildLaunchEveningParams.
@@ -6031,6 +6037,7 @@ export default function LaunchEveningScanner({
               concept at all) — removed. Grayed out (not disabled — still editable, since RATE can be
               flipped back on at any time) while RATE/UNIVERSE reads UNIVERSE, since the bridge drops
               both floors under ignoreRatings regardless of what is typed into them. */}
+          {!launchEveningIgnoreRatings && (
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
             launchEveningIgnoreRatings && "opacity-40"
@@ -6069,7 +6076,9 @@ export default function LaunchEveningScanner({
               </div>
             </div>
           </div>
+          )}
 
+          {!launchEveningIgnoreRatings && (
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
             launchEveningIgnoreRatings && "opacity-40"
@@ -6107,6 +6116,7 @@ export default function LaunchEveningScanner({
               </div>
             </div>
           </div>
+          )}
 
           {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with LaunchEvening's OWN static
               values (not Arbitrage's arbitrageTickerMetaByTicker corr/beta/sigma the old ρ/β/σ read).
@@ -6116,7 +6126,8 @@ export default function LaunchEveningScanner({
               (rides Rating, same slot the table's own γ column reads). These are a DIFFERENT kind of
               filter than MINRATE/MINTOTAL above: a floor/ceiling on a STATIC published value, not a
               threshold on the trade's own win_rate. */}
-          {[
+          <ScannerStatsButton on={statsOn} onToggle={toggleStats} />
+          {statsOn && [
             { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
             { label: "α", title: "Alpha — the ticker's own published alpha, sign-matched to the row's side", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
             { label: "γ", title: "Gamma — the (class, sign) launchEvening-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
@@ -6188,184 +6199,34 @@ export default function LaunchEveningScanner({
         </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          
-            <div className="flex h-7 items-center gap-2">
-              {[
-                ...LAUNCHEVENING_EXIT_CLASSES,
-              ].map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => setLaunchEveningExitClass(b.key as "eve1600")}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    launchEveningExitClass === b.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {b.label}
-                </button>
-                ))}
-            </div>
-
-            <div className="flex-1" />
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
-              {scannerPresetSaveMode ? (
-                <input
-                  type="text"
-                  value={scannerPresetDraftName}
-                  onChange={(e) => setScannerPresetDraftName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setScannerPresetSaveMode(false);
-                      setScannerPresetDraftName("");
-                    }
-                  }}
-                  autoFocus
-                  placeholder="NAME..."
-                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
-                />
-              ) : (
-                <GlassSelect
-                  value={scannerPresetId}
-                  onChange={async (e) => {
-                    const nextId = e.target.value;
-                    setScannerPresetId(nextId);
-                    if (!nextId) {
-                      clearScannerSharedFilters();
-                      return;
-                    }
-                    if (scannerPresetBusy || scannerPresetSaveMode) return;
-                    setScannerPresetBusy(true);
-                    try {
-                      const preset = getSharedFilterLocalPreset(nextId);
-                      if (preset && applyScannerPreset(preset)) return;
-                      const fallbackPreset = scannerPresets.find((x) => x.id === nextId);
-                      if (fallbackPreset && applyScannerPreset(fallbackPreset)) return;
-                      setScannerPresetStatus("Apply failed");
-                    } catch {
-                      setScannerPresetStatus("Apply failed");
-                    } finally {
-                      setScannerPresetBusy(false);
-                    }
-                  }}
-                  options={[
-                    { value: "", label: "NONE" },
-                    ...scannerPresets.map((preset) => ({
-                      value: preset.id,
-                      label: preset.name.toUpperCase(),
-                    })),
-                  ]}
-                  compact
-                  panelOffsetX={-42}
-                  panelWidth={124}
-                  className="w-[92px] !h-7 !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                />
-              )}
+        <ScannerControlCard
+          filters={scannerFilters}
+          presetId={scannerPresetId}
+          setPresetId={setScannerPresetId}
+          saveCurrentScannerPreset={saveCurrentScannerPreset}
+          applyScannerPreset={applyScannerPreset}
+          clearScannerSharedFilters={clearScannerSharedFilters}
+        >
+          <div className="flex h-7 items-center gap-2">
+            {[
+              ...LAUNCHEVENING_EXIT_CLASSES,
+            ].map((b) => (
               <button
+                key={b.key}
                 type="button"
-                onClick={() => {
-                  if (scannerPresetSaveMode) {
-                    if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    return;
-                  }
-                  setScannerPresetSaveMode(true);
-                  setScannerPresetDraftName("");
-                }}
-                disabled={scannerPresetBusy}
+                onClick={() => setLaunchEveningExitClass(b.key as "eve1600")}
                 className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetBusy
-                    ? "border-transparent text-zinc-600"
-                    : scannerPresetSaveMode
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  TOOLBAR_BUTTON_BASE,
+                  launchEveningExitClass === b.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
                 )}
               >
-                SAVE
+                {b.label}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode) return;
-                  const ok = deleteSharedFilterLocalPreset(scannerPresetId);
-                  if (!ok) {
-                    setScannerPresetStatus("Delete failed");
-                    return;
-                  }
-                  const items = listSharedFilterLocalPresets().filter((x) => {
-                    if (x.scope !== "BOTH") return false;
-                    try {
-                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
-                    } catch {
-                      return false;
-                    }
-                  });
-                  setScannerPresets(items);
-                  setScannerPresetId(items[0]?.id ?? "");
-                  setScannerPresetStatus("Deleted");
-                }}
-                disabled={!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetId && !scannerPresetBusy && !scannerPresetSaveMode
-                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
-                    : "border-transparent text-zinc-600"
-                )}
-              >
-                DEL
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowSharedMinMax((v) => !v)}
-              className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
-              title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
-            >
-              {showSharedMinMax ? (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="group-hover:text-rose-400 transition-colors"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              )}
-            </button>
-        </div>
+              ))}
+          </div>
+        </ScannerControlCard>
 
         {showSharedMinMax && (
           <SharedMinMaxPanel
@@ -6480,7 +6341,7 @@ export default function LaunchEveningScanner({
                   startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
                   first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
               <div
-                className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
+                className="inline-flex items-center gap-2 rounded-xl border p-0.5 border-white/10 bg-white/[0.03] opacity-60 select-none"
                 title="Inactive. This strategy does not use the %/σ/α/γ/τ/λ switch or the floor/cap boxes: the unit is always %, there is no flat floor, and the only bound on a move is the published gamma."
               >
                 {(["%", "σ", "α", "γ", "τ", "λ"] as const).map((g) => (
@@ -6517,7 +6378,7 @@ export default function LaunchEveningScanner({
             Wrapped at order-1 so it lands in the same band as the filter row above it: the column
             lays out by `order`, not by source, and at the default order-0 this strip floated to
             the top of the column, above the filters. */}
-        <div className="order-1">
+        <div className="order-3">
             <ActiveTickerCard
               ticker={activeSelection.ticker ?? null}
               stats={activeCardStats}
@@ -6538,7 +6399,7 @@ export default function LaunchEveningScanner({
         <div className="flex items-center justify-between gap-2">
           {!isStreamOnlyShell && (
             <div className="flex items-center gap-2">
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {[
                   { key: "day", label: "DAY" },
                   { key: "last", label: "LAST" },
@@ -6589,7 +6450,7 @@ export default function LaunchEveningScanner({
                   </button>
                 ))}
               </div>
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {dateMode === "day" ? (
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
@@ -6611,7 +6472,7 @@ export default function LaunchEveningScanner({
                   <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
+                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d")}
                       options={[
                         { value: "3d", label: "3 DAYS" },
                         { value: "5d", label: "5 DAYS" },
@@ -6619,6 +6480,8 @@ export default function LaunchEveningScanner({
                         { value: "15d", label: "15 DAYS" },
                         { value: "20d", label: "20 DAYS" },
                         { value: "30d", label: "30 DAYS" },
+                        { value: "60d", label: "60 DAYS" },
+                        { value: "90d", label: "90 DAYS" },
                       ]}
                       className="!inline-flex !w-[90px] !min-w-[90px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={110}
@@ -6671,7 +6534,9 @@ export default function LaunchEveningScanner({
           <div className="flex items-center gap-2">
           {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
+              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>{analyticsSummary.dayCount > 0 && (
+                <> | <span className="text-zinc-200">{intn(analyticsSummary.dayCount)} {analyticsSummary.dayCount === 1 ? "day" : "days"}</span></>
+              )}
             </div>
           )}
           </div>
@@ -6847,7 +6712,7 @@ export default function LaunchEveningScanner({
           <div className="space-y-3">
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. */}
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,3.94fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
@@ -6870,7 +6735,7 @@ export default function LaunchEveningScanner({
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
                   no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
                   enough to wrap at a normal width. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 {/* 1 — counts */}
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
@@ -6951,7 +6816,7 @@ export default function LaunchEveningScanner({
                 {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={
@@ -8535,9 +8400,6 @@ export default function LaunchEveningScanner({
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                EVENING LAUNCH SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {launchEveningExitClass} exit
-              </div>
               {launchEveningSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
               {launchEveningSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{launchEveningSnapshotError}</span>}
             </div>
@@ -8551,7 +8413,7 @@ export default function LaunchEveningScanner({
                 ever showed a subset of what was already being computed one scroll down for the
                 equity curve. */}
             <div className="flex flex-col xl:flex-row gap-3">
-              <div className="w-full xl:w-[220px] xl:flex-shrink-0">
+              <div className="w-full xl:w-[calc(220px_+_(100%_-_328px)_*_0.0741)] xl:flex-shrink-0">
                 <SummaryMetricCard
                   label="TOTAL PNL ($)"
                   value={num(analyticsSummary.totalPnlUsd, 2)}
@@ -8569,7 +8431,7 @@ export default function LaunchEveningScanner({
                 />
               </div>
               {/* Nine columns of two, filled column by column — same layout ArbitrageScanner uses. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
 
@@ -8628,7 +8490,7 @@ export default function LaunchEveningScanner({
 
                 <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(analyticsSummary.profitFactor) ? num(analyticsSummary.profitFactor, 2) : "∞"} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={

@@ -115,15 +115,18 @@ export function SummaryMetricCardImpl({
   inline?: boolean;
 }) {
   return (
-    <GlassCard hoverable={false} className={clsx("p-3", className)}>
+    <GlassCard hoverable={false} className={clsx(inline ? "px-3 py-2" : "p-3", className)}>
       <div
         className={clsx(
           inline
-            ? "h-full flex items-center justify-between gap-4"
+            ? "h-full flex items-center justify-between gap-3"
             : "h-full flex flex-col",
         )}
       >
-        <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{label}</div>
+        {/* inline cards: tighter leading and tracking, so a label that has to wrap (PROFIT FACTOR, MEDIAN DAY (10d)) adds
+            12px per extra line instead of 15 and the row is no taller than it must be (the operator's own instruction,
+            2026-11-22: remove the extra height). */}
+        <div className={clsx("text-[10px] uppercase font-mono text-zinc-500", inline ? "leading-tight tracking-wider" : "tracking-widest")}>{label}</div>
         <div
           className={clsx(
             inline
@@ -496,12 +499,12 @@ export const MultiSelectFilter = ({
 
   return (
     <>
-      <div className="relative flex h-7 items-center bg-black/20 rounded-full border border-white/5" ref={wrapRef}>
+      <div className="relative flex h-7 items-center bg-black/20 rounded-lg" ref={wrapRef}>
         <button
           type="button"
           onClick={toggleEnabled}
           className={clsx(
-            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-full",
+            "inline-flex h-full items-center px-3 text-[10px] font-mono font-bold uppercase transition-all rounded-l-lg",
             enabled === "off" && C.chipInactive,
             enabled === "include" && "bg-yellow-400/90 text-emerald-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
             enabled === "exclude" && "bg-yellow-400/90 text-red-400 border-transparent shadow-[0_0_10px_rgba(250,204,21,0.3)]",
@@ -532,7 +535,7 @@ export const MultiSelectFilter = ({
             onMainClick?.();
             if (!hideArrow) setOpen((v) => !v);
           }}
-          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-full ${C.arrow}`}
+          className={`inline-flex h-full min-w-[28px] items-center justify-center px-2 transition-all rounded-r-lg ${C.arrow}`}
         >
           <ChevronIcon open={open} />
         </button>

@@ -197,7 +197,7 @@ export type ScannerFilterState = {
   priceMode: PaperArbPriceMode;
   qSide: "" | "Long" | "Short";
   qTicker: string;
-  rangePreset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d";
+  rangePreset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d";
   ratingEnabledBands: Record<PaperArbRatingBand, boolean>;
   ratingMode: PaperArbRatingMode;
   ratingRules: PaperArbRatingRule[];
@@ -435,7 +435,7 @@ export type ScannerFilterSetters = {
   setPriceMode: React.Dispatch<React.SetStateAction<PaperArbPriceMode>>;
   setQSide: React.Dispatch<React.SetStateAction<"" | "Long" | "Short">>;
   setQTicker: React.Dispatch<React.SetStateAction<string>>;
-  setRangePreset: React.Dispatch<React.SetStateAction<"3d" | "5d" | "10d" | "15d" | "20d" | "30d">>;
+  setRangePreset: React.Dispatch<React.SetStateAction<"3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d">>;
   setRatingEnabledBands: React.Dispatch<React.SetStateAction<Record<PaperArbRatingBand, boolean>>>;
   setRatingMode: React.Dispatch<React.SetStateAction<PaperArbRatingMode>>;
   setRatingRules: React.Dispatch<React.SetStateAction<PaperArbRatingRule[]>>;

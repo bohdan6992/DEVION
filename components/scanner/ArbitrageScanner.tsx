@@ -51,7 +51,7 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
@@ -68,10 +68,16 @@ import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
-import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { useActiveTickerSelection, useActiveTickerSnapshot, useRowTickerSelect } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel, { SaveModeButton } from "./shell/panels/ExecutionSettingsPanel";
+import ScannerControlCard from "./shell/panels/ScannerControlCard";
+import { RatingModeMenu } from "./OPGReversalRatingMenu";
+import { ScannerRateButton, ScannerStatsButton, useStatsToggle } from "../shared/filters/ScannerToggleButtons";
+import { ScannerMarketControl, useMarketFilter } from "../shared/filters/ScannerMarketControl";
+import { parseMarketTypes } from "../../lib/marketType";
+import { useMarketTypeByDay } from "../../lib/scanner/useMarketTypeByDay";
 /**
  * EVENT FILTERS split by side (2026-10-11, the operator's own instruction), e.g. "START" becomes
  * "START LONG"/"START SHORT" as two separate cards. Deliberately NOT built by calling
@@ -691,6 +697,8 @@ export default function ArbitrageScanner({
     streamWindowCaptureBusy,
     setStreamWindowCaptureBusy,
   } = scannerFilters;
+  const { statsOn, toggleStats } = useStatsToggle({ minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma }, { minCorr: setMinCorr, maxCorr: setMaxCorr, minBeta: setMinBeta, maxBeta: setMaxBeta, minSigma: setMinSigma, maxSigma: setMaxSigma });
+  const { marketTypes, setMarketTypes, marketOn, setMarketOn } = useMarketFilter();
 
   // IGNORE RATINGS — the operator's own instruction (2026-09-27): the ALL/TOP + SESSION/BIN/BINS
   // toggle row is always SESSION+ALL now, no UI can flip it away (see the removed toggle's own
@@ -1410,7 +1418,7 @@ export default function ArbitrageScanner({
     if (toYmd(dateFrom) && v < dateFrom) setDateFrom(v);
   }, [dateFrom]);
 
-  const applyRangePreset = useCallback((preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  const applyRangePreset = useCallback((preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d") => {
     setDateMode("last");
     setRangePreset(preset);
     const n =
@@ -1418,7 +1426,9 @@ export default function ArbitrageScanner({
       preset === "5d" ? 5 :
       preset === "10d" ? 10 :
       preset === "15d" ? 15 :
-      preset === "20d" ? 20 : 30;
+      preset === "20d" ? 20 :
+      preset === "30d" ? 30 :
+      preset === "60d" ? 60 : 90;
     const end = sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd();
     if (!sortedDaysAsc.length) {
       setDateTo(end);
@@ -1436,7 +1446,7 @@ export default function ArbitrageScanner({
 
   const handleRangePresetSelectChange = useCallback(
     (e: { target: { value: string } }) =>
-      applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d"),
+      applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d"),
     [applyRangePreset]
   );
 
@@ -1634,7 +1644,9 @@ export default function ArbitrageScanner({
         applyStr(s.minTierBp, setMinTierBp); applyStr(s.maxTierBp, setMaxTierBp);
         applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
-        applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
+        applyStr(s.minSigma, setMinSigma);
+        if (Array.isArray(s.marketTypes)) setMarketTypes(parseMarketTypes(s.marketTypes));
+        if (typeof s.marketOn === "boolean") setMarketOn(s.marketOn); applyStr(s.maxSigma, setMaxSigma);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
         applyStr(s.minRoundLot, setMinRoundLot); applyStr(s.maxRoundLot, setMaxRoundLot);
         applyStr(s.minAdv20, setMinAdv20); applyStr(s.maxAdv20, setMaxAdv20);
@@ -1805,6 +1817,8 @@ export default function ArbitrageScanner({
       minBeta,
       maxBeta,
       minSigma,
+      marketTypes,
+      marketOn,
       maxSigma,
       minMarketCapM,
       maxMarketCapM,
@@ -1963,7 +1977,7 @@ export default function ArbitrageScanner({
       minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct,
       minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
       minImbARCA, maxImbARCA,
-      minImbExchValue, maxImbExchValue,
+      minImbExchValue, maxImbExchValue, marketTypes, marketOn,
     ]
   );
 
@@ -2352,6 +2366,7 @@ export default function ArbitrageScanner({
   );
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
   const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  useRowTickerSelect(ACTIVE_TICKER_STRATEGY);
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeCardStats = useMemo(() => {
     const f = activeSnapshot.fields ?? {};
@@ -2587,7 +2602,7 @@ export default function ArbitrageScanner({
       startAbsNeg,
       tickersText,
       zapMode,
-      sharedRangeFilterModes,
+      sharedRangeFilterModes, marketTypes, marketOn,
     ]);
 
   const effectiveStreamAutomationConfig = useMemo<StreamAutomationConfig>(() => ({
@@ -2927,6 +2942,7 @@ export default function ArbitrageScanner({
       addDelayMinutes,
       exitConfirmCandles: normalizedMinHoldCandles + 1,
       ratingType: ratingType ?? "any",
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       ignoreRatings: arbitrageIgnoreRatings,
       ratingsMode: arbRatingsMode,
       ratingsFrozen: arbFrozen,
@@ -3122,6 +3138,7 @@ export default function ArbitrageScanner({
       coreOnly: arbCoreOnly,
       ratingOutcome: arbOutcome,
 
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
@@ -3632,7 +3649,7 @@ export default function ArbitrageScanner({
     ruleBand,
     sharedRangeFilterModes,
     startAbsMax,
-    zapMode,
+    zapMode, marketTypes, marketOn,
   ]);
 
   /**
@@ -4367,6 +4384,7 @@ export default function ArbitrageScanner({
       return true;
     });
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
+  const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   useEffect(() => {
     // Historical ticker metadata is a Scanner fallback for rows missing corr/beta/sigma. The live
@@ -4425,7 +4443,7 @@ export default function ArbitrageScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [isStreamOnlyShell, optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [isStreamOnlyShell, optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, marketTypes, marketOn]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -4866,6 +4884,7 @@ export default function ArbitrageScanner({
                 (row) => row.benchTicker?.trim().toUpperCase() ?? null
               );
             }
+            if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
             if (catParam) catResults.push(catParam);
             return null;
           }
@@ -4968,6 +4987,7 @@ export default function ArbitrageScanner({
             (row) => row.benchTicker?.trim().toUpperCase() ?? null
           );
         }
+        if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
         if (catParam) parameterMap.set(definition.key, catParam);
         continue;
       }
@@ -5865,21 +5885,8 @@ export default function ArbitrageScanner({
               their useScannerFilters defaults (SESSION/ALL) forever now, nothing in the UI can flip
               them. RATE/UNIVERSE takes its place - drops the ratings/eligibility gate entirely when
               on, styled and named 1-to-1 off ReversalScanner's own reversalIgnoreRatings button. */}
-          <button
-            type="button"
-            onClick={() => setArbitrageIgnoreRatings((v) => !v)}
-            title={arbitrageIgnoreRatings
-              ? "UNIVERSE — ratings dropped: every ticker is eligible, ignoring MINRATE/MINTOTAL and the published rating gate entirely. Click to apply ratings again."
-              : "RATE — ratings applied: MINRATE/MINTOTAL and the published rating gate are enforced. Click to drop ratings (UNIVERSE)."}
-            className={clsx(
-              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
-              arbitrageIgnoreRatings
-                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
-                : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
-            )}
-          >
-            {arbitrageIgnoreRatings ? "UNIVERSE" : "RATE"}
-          </button>
+          <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} />
+          <ScannerRateButton ignoreRatings={arbitrageIgnoreRatings} onToggle={() => setArbitrageIgnoreRatings((v) => !v)} />
 
           {/* WHICH rating table judges each replayed day, plus the ❄ and CORE. Four letters each so
               the row reads as a column of equal words, each in its own colour while inactive
@@ -5896,107 +5903,20 @@ export default function ArbitrageScanner({
               And the rating is a primary condition for which candidates the stream picks
               up at all, not a reporting detail. */}
           {!arbitrageIgnoreRatings && (
-            <>
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {([
-                { key: "asof", label: "ASOF", tone: "text-[#6ee7b7]/80 hover:text-[#6ee7b7]",
-                  title: "AS-OF - each replayed day is judged ONLY by trades dated before it, rate/total rebuilt from the published trade log. No look-ahead, and a day's result never changes again. Default." },
-                { key: "asofew", label: "EXPO", tone: "text-violet-300/80 hover:text-violet-200",
-                  title: "AS-OF exponential - the same situations AS-OF counts, rated differently. Sessions are grouped into blocks of 5; every trade inside a block weighs the same, and each block back from the replayed day weighs half as much every 4 blocks (1.00 / 0.84 / 0.71 / 0.59 / 0.50 / ... ~0.13 at three months). Fresh weeks carry the rate; the situation count, MINTOTAL and the evidence needed for gamma are untouched, and the day's own result never leaks in." },
-                { key: "live", label: "LIVE", tone: "text-[#f3a6b2]/80 hover:text-[#f3a6b2]",
-                  title: "LIVE - TODAY's best_params applied to every replayed day. The old behaviour, kept because 'what would today's knowledge have done' is a real question - but it is why a losing day can later show as positive." },
-              ] as const).map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  title={m.title}
-                  onClick={() => setArbRatingsMode(m.key)}
-                  className={clsx(
-                    "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                    arbRatingsMode === m.key
-                      ? "accent-soft"
-                      : clsx("border-transparent hover:bg-white/5", m.tone)
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            {/* A SECOND capsule, not a continuation of the first. The four on the left are one
-                exclusive choice; CORE and NORM/NRRW are independent switches, and after they were
-                given their own kind of highlight the next thing missing was simply the gap - one
-                container per group is what the Secondary Button Standard says (AGENTS.md), and it
-                is what stops "LIVE + CORE + NRRW lit at once" from reading as three selections in
-                one radio group. */}
-            <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
-              {/* FROZEN. A snowflake rather than a word because it qualifies the three modes to its
-                  left rather than naming a fourth one - a label here would read as a sibling of
-                  ASOF/EXPO/LIVE, which is the confusion that made it a mode in the first place. */}
-              <button
-                type="button"
-                onClick={() => setArbFrozen((v) => !v)}
-                title={arbFrozen
-                  ? "FROZEN on - every day is judged as of ITSELF. LIVE reads the snapshot taken that morning; ASOF and EXPO cut the trade log at each day, so nothing a day could not have known reaches it. Click for one table over the whole range."
-                  : "FROZEN off - one table for the whole range. LIVE is today's published file, ASOF the whole trade log, EXPO the whole log weighted toward its newest session. Click to measure each day as of itself."}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[11px] font-mono font-bold leading-none transition-all border",
-                  arbFrozen
-                    ? "border-sky-400/70 bg-sky-500/15 text-sky-200"
-                    : "border-transparent text-sky-300/70 hover:text-sky-200 hover:bg-white/5"
-                )}
-                aria-label="Frozen: judge each day as of itself"
-              >
-                ❄
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setArbCoreOnly((v) => !v)}
-                title={arbCoreOnly
-                  ? "CORE on - only the consistently-good tickers, rebuilt as of each day. NOTE: measured on OPG this list showed NO edge (per-ticker persistence corr +0.006); the stability is real, the edge is not."
-                  : "CORE off - every ticker the rating mode admits. Click to restrict to the consistently-good list."}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  // A TOGGLE, not one of the four to its left. Its "on" state is deliberately a
-                  // different SHAPE of highlight - its own hue as a ring and tint, rather than
-                  // accent-soft's solid fill - because the strip holds two kinds of control and
-                  // only the colour can say so. Without this all six look like one radio group and
-                  // "LIVE + CORE + NRRW lit at once" reads as a bug instead of as three answers to
-                  // three questions.
-                  arbCoreOnly
-                    ? "border-amber-400/70 bg-amber-500/15 text-amber-200"
-                    : "border-transparent text-amber-300/80 hover:text-amber-200 hover:bg-white/5"
-                )}
-              >
-                CORE
-              </button>
-
-              {/* The SUCCESS RULE, not another mode - it answers "what counted as a win", while the
-                  four to its left answer "which history was it measured over". The two axes
-                  compose. Lime rather than reusing a mode colour, so it reads as a different KIND
-                  of choice at a glance. */}
-              <button
-                type="button"
-                onClick={() => setArbOutcome((v) => (v === "norm" ? "narrow" : "norm"))}
-                title={arbOutcome === "narrow"
-                  ? "NRRW - a situation counts as successful when the deviation at the class close (09:30 for PRE) is SMALLER than it was at entry. One deviation past the threshold, nothing checked after it, and any amount of coming in counts. Not in best_params, so it is computed from the trade log in every mode. Click for the published rule."
-                  : "NORM - the published rule: (hard + soft) / total, i.e. the event had to normalise. Click to score instead on whether the deviation simply came in by the close."}
-                className={clsx(
-                  "px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase transition-all border",
-                  // Same reasoning as CORE above: a lit toggle, not a selected mode.
-                  arbOutcome === "narrow"
-                    ? "border-lime-400/70 bg-lime-500/15 text-lime-200"
-                    : "border-transparent text-lime-300/80 hover:text-lime-200 hover:bg-white/5"
-                )}
-              >
-                {arbOutcome === "narrow" ? "NRRW" : "NORM"}
-              </button>
-            </div>
-            </>
+            <RatingModeMenu
+              mode={arbRatingsMode}
+              setMode={setArbRatingsMode}
+              frozen={arbFrozen}
+              setFrozen={setArbFrozen}
+              core={arbCoreOnly}
+              setCore={setArbCoreOnly}
+              narrow={arbOutcome === "narrow"}
+              setNarrow={(v) => setArbOutcome(v ? "narrow" : "norm")}
+            />
           )}
 
 
+          {!arbitrageIgnoreRatings && (
           <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", arbitrageIgnoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINRATE</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -6031,7 +5951,9 @@ export default function ArbitrageScanner({
               </div>
             </div>
           </div>
+          )}
 
+          {!arbitrageIgnoreRatings && (
           <div className={clsx("flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity", arbitrageIgnoreRatings && "opacity-40")}>
             <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">MINTOTAL</span>
             <div className="group relative h-7 w-14 overflow-hidden rounded-md">
@@ -6066,9 +5988,11 @@ export default function ArbitrageScanner({
               </div>
             </div>
           </div>
+          )}
         </div>
 
-          {[
+          <ScannerStatsButton on={statsOn} onToggle={toggleStats} />
+          {statsOn && [
             { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
             { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
             { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
@@ -6229,7 +6153,7 @@ export default function ArbitrageScanner({
               </div>
             </div>
 
-            {[
+          {[
               { label: "ρ", title: "Correlation", minValue: minCorr, maxValue: maxCorr, setMin: setMinCorr, setMax: setMaxCorr, step: 0.05 },
               { label: "β", title: "Beta", minValue: minBeta, maxValue: maxBeta, setMin: setMinBeta, setMax: setMaxBeta, step: 0.1 },
               { label: "σ", title: "Sigma", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
@@ -6301,258 +6225,108 @@ export default function ArbitrageScanner({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "PRE", label: "PRE" },
-                { key: "OPEN", label: "OPEN" },
-                { key: "INTRA", label: "INTRA" },
-                { key: "POST", label: "POST" },
-              ].map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => {
-                    const nextBand = b.key as PaperArbRatingBand;
-                    if (controlledSession == null) {
-                      setRuleBand(nextBand);
-                    }
-                    // BLUE/ARK/PRINT/GLOBAL keep a slot in the shared record (every other scanner
-                    // fork reads the same type) but the toolbar no longer offers them, so they
-                    // never go true from here.
-                    setRatingEnabledBands({
-                      BLUE: false,
-                      ARK: false,
-                      PRE: nextBand === "PRE",
-                      OPEN: nextBand === "OPEN",
-                      INTRA: nextBand === "INTRA",
-                      PRINT: false,
-                      POST: nextBand === "POST",
-                      GLOBAL: false,
-                    });
-                    setSession(nextBand as PaperArbSession);
-                  }}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    ruleBand === b.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {b.label}
-                </button>
-                ))}
-            </div>
-
-            <div className="h-7 w-px self-center bg-white/5" />
-
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "ALL", label: "ALL" },
-                { key: "TOP", label: "TOP" },
-              ].map((m) => (
-                <button
-                  key={m.key}
-                  type="button"
-                  onClick={() => {
-                    const next = m.key as "ALL" | "TOP";
-                    setScopeMode(next);
-                    if (next === "ALL") setTopN(1000);
-                  }}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    scopeMode === m.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="h-7 w-px self-center bg-white/5" />
-
-            <div className="flex h-7 items-center gap-2">
-              {[
-                { key: "any", label: "ANY" },
-                { key: "hard", label: "HARD" },
-                { key: "soft", label: "SOFT" },
-              ].map((rt) => (
-                <button
-                  key={rt.key}
-                  type="button"
-                  onClick={() => setRatingType(rt.key as PaperArbRatingType)}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    ratingType === rt.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                  title={`RatingType = ${rt.key}`}
-                >
-                  {rt.label}
-                </button>
-                ))}
-            </div>
-
-            <div className="flex-1" />
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
-              {scannerPresetSaveMode ? (
-                <input
-                  type="text"
-                  value={scannerPresetDraftName}
-                  onChange={(e) => setScannerPresetDraftName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setScannerPresetSaveMode(false);
-                      setScannerPresetDraftName("");
-                    }
-                  }}
-                  autoFocus
-                  placeholder="NAME..."
-                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
-                />
-              ) : (
-                <GlassSelect
-                  value={scannerPresetId}
-                  onChange={async (e) => {
-                    const nextId = e.target.value;
-                    setScannerPresetId(nextId);
-                    if (!nextId) {
-                      clearScannerSharedFilters();
-                      return;
-                    }
-                    if (scannerPresetBusy || scannerPresetSaveMode) return;
-                    setScannerPresetBusy(true);
-                    try {
-                      const preset = getSharedFilterLocalPreset(nextId);
-                      if (preset && applyScannerPreset(preset)) return;
-                      const fallbackPreset = scannerPresets.find((x) => x.id === nextId);
-                      if (fallbackPreset && applyScannerPreset(fallbackPreset)) return;
-                      setScannerPresetStatus("Apply failed");
-                    } catch {
-                      setScannerPresetStatus("Apply failed");
-                    } finally {
-                      setScannerPresetBusy(false);
-                    }
-                  }}
-                  options={[
-                    { value: "", label: "NONE" },
-                    ...scannerPresets.map((preset) => ({
-                      value: preset.id,
-                      label: preset.name.toUpperCase(),
-                    })),
-                  ]}
-                  compact
-                  panelOffsetX={-42}
-                  panelWidth={124}
-                  className="w-[92px] !h-7 !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                />
-              )}
+        <ScannerControlCard
+          filters={scannerFilters}
+          presetId={scannerPresetId}
+          setPresetId={setScannerPresetId}
+          saveCurrentScannerPreset={saveCurrentScannerPreset}
+          applyScannerPreset={applyScannerPreset}
+          clearScannerSharedFilters={clearScannerSharedFilters}
+        >
+          <div className="flex h-7 items-center gap-2">
+            {[
+              { key: "PRE", label: "PRE" },
+              { key: "OPEN", label: "OPEN" },
+              { key: "INTRA", label: "INTRA" },
+              { key: "POST", label: "POST" },
+            ].map((b) => (
               <button
+                key={b.key}
                 type="button"
                 onClick={() => {
-                  if (scannerPresetSaveMode) {
-                    if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    return;
+                  const nextBand = b.key as PaperArbRatingBand;
+                  if (controlledSession == null) {
+                    setRuleBand(nextBand);
                   }
-                  setScannerPresetSaveMode(true);
-                  setScannerPresetDraftName("");
-                }}
-                disabled={scannerPresetBusy}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetBusy
-                    ? "border-transparent text-zinc-600"
-                    : scannerPresetSaveMode
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-              >
-                SAVE
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode) return;
-                  const ok = deleteSharedFilterLocalPreset(scannerPresetId);
-                  if (!ok) {
-                    setScannerPresetStatus("Delete failed");
-                    return;
-                  }
-                  const items = listSharedFilterLocalPresets().filter((x) => {
-                    if (x.scope !== "BOTH") return false;
-                    try {
-                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
-                    } catch {
-                      return false;
-                    }
+                  // BLUE/ARK/PRINT/GLOBAL keep a slot in the shared record (every other scanner
+                  // fork reads the same type) but the toolbar no longer offers them, so they
+                  // never go true from here.
+                  setRatingEnabledBands({
+                    BLUE: false,
+                    ARK: false,
+                    PRE: nextBand === "PRE",
+                    OPEN: nextBand === "OPEN",
+                    INTRA: nextBand === "INTRA",
+                    PRINT: false,
+                    POST: nextBand === "POST",
+                    GLOBAL: false,
                   });
-                  setScannerPresets(items);
-                  setScannerPresetId(items[0]?.id ?? "");
-                  setScannerPresetStatus("Deleted");
+                  setSession(nextBand as PaperArbSession);
                 }}
-                disabled={!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode}
                 className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetId && !scannerPresetBusy && !scannerPresetSaveMode
-                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
-                    : "border-transparent text-zinc-600"
+                  TOOLBAR_BUTTON_BASE,
+                  ruleBand === b.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
                 )}
               >
-                DEL
+                {b.label}
               </button>
-            </div>
+              ))}
+          </div>
 
-            <button
-              type="button"
-              onClick={() => setShowSharedMinMax((v) => !v)}
-              className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
-              title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
-            >
-              {showSharedMinMax ? (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="group-hover:text-rose-400 transition-colors"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              )}
-            </button>
-        </div>
+          <div className="h-7 w-px self-center bg-white/5" />
+
+          <div className="flex h-7 items-center gap-2">
+            {[
+              { key: "ALL", label: "ALL" },
+              { key: "TOP", label: "TOP" },
+            ].map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => {
+                  const next = m.key as "ALL" | "TOP";
+                  setScopeMode(next);
+                  if (next === "ALL") setTopN(1000);
+                }}
+                className={clsx(
+                  TOOLBAR_BUTTON_BASE,
+                  scopeMode === m.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="h-7 w-px self-center bg-white/5" />
+
+          <div className="flex h-7 items-center gap-2">
+            {[
+              { key: "any", label: "ANY" },
+              { key: "hard", label: "HARD" },
+              { key: "soft", label: "SOFT" },
+            ].map((rt) => (
+              <button
+                key={rt.key}
+                type="button"
+                onClick={() => setRatingType(rt.key as PaperArbRatingType)}
+                className={clsx(
+                  TOOLBAR_BUTTON_BASE,
+                  ratingType === rt.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
+                )}
+                title={`RatingType = ${rt.key}`}
+              >
+                {rt.label}
+              </button>
+              ))}
+          </div>
+        </ScannerControlCard>
 
         {showSharedMinMax && (
           <SharedMinMaxPanel
@@ -6704,7 +6478,7 @@ export default function ArbitrageScanner({
                   );
                 })}
 
-                <div className={clsx("group relative w-[78px] rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
+                <div className={clsx("group relative w-14 rounded-md border border-[#f3a6b2]/50", zapMode === "off" && "opacity-60")} title="Start threshold for POSITIVE deviations (a SHORT entry). Coral = short.">
                   <input
                     type="number"
                     step={0.1}
@@ -6737,7 +6511,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px] rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a Long entry). Empty = the same threshold as the short one. Start max and end stay shared. Mint = long.">
+                <div className={clsx("group relative w-14 rounded-md border border-[#6ee7b7]/45", zapMode === "off" && "opacity-60")} title="Start threshold for NEGATIVE deviations (a Long entry). Empty = the same threshold as the short one. Start max and end stay shared. Mint = long.">
                   <input
                     type="number"
                     step={0.1}
@@ -6777,7 +6551,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px] rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound on the start threshold (empty = none): a deviation beyond it is not taken. Silver = the ceiling.">
+                <div className={clsx("group relative w-14 rounded-md border border-zinc-200/35", zapMode === "off" && "opacity-60")} title="Upper bound on the start threshold (empty = none): a deviation beyond it is not taken. Silver = the ceiling.">
                   <input
                     type="number"
                     step={0.1}
@@ -6811,7 +6585,7 @@ export default function ArbitrageScanner({
                     </button>
                   </div>
                 </div>
-                <div className={clsx("group relative w-[78px] rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold: a situation is closed once its deviation falls back to this. Gold = the exit.">
+                <div className={clsx("group relative w-14 rounded-md border border-amber-400/55", zapMode === "off" && "opacity-60")} title="Exit threshold: a situation is closed once its deviation falls back to this. Gold = the exit.">
                   <input
                     type="number"
                     step={0.05}
@@ -6854,7 +6628,7 @@ export default function ArbitrageScanner({
             Wrapped at order-1 so it lands in the same band as the filter row above it: the column
             lays out by `order`, not by source, and at the default order-0 this strip floated to
             the top of the column, above the filters. */}
-        <div className="order-1">
+        <div className="order-3">
             <ActiveTickerCard
               ticker={activeSelection.ticker ?? null}
               stats={activeCardStats}
@@ -6875,7 +6649,7 @@ export default function ArbitrageScanner({
         <div className="flex items-center justify-between gap-2">
           {!isStreamOnlyShell && (
             <div className="flex items-center gap-2">
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {[
                   { key: "day", label: "DAY" },
                   { key: "last", label: "LAST" },
@@ -6913,7 +6687,7 @@ export default function ArbitrageScanner({
                   </button>
                 ))}
               </div>
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {dateMode === "day" ? (
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
@@ -6975,7 +6749,9 @@ export default function ArbitrageScanner({
           <div className={clsx("flex items-center gap-2", primaryPanel !== "stream" && "ml-auto")}>
           {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
+              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>{analyticsSummary.dayCount > 0 && (
+                <> | <span className="text-zinc-200">{intn(analyticsSummary.dayCount)} {analyticsSummary.dayCount === 1 ? "day" : "days"}</span></>
+              )}
             </div>
           )}
           </div>
@@ -7350,7 +7126,7 @@ export default function ArbitrageScanner({
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. They used to live in two grids of three and seven columns,
                 which made the first four about twice as wide as the rest. */}
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,3.94fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
@@ -7375,7 +7151,7 @@ export default function ArbitrageScanner({
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
                   no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
                   enough to wrap at a normal width. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 {/* 1 — counts */}
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
@@ -7456,7 +7232,7 @@ export default function ArbitrageScanner({
                 {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={
@@ -9035,7 +8811,7 @@ export default function ArbitrageScanner({
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. They used to live in two grids of three and seven columns,
                 which made the first four about twice as wide as the rest. */}
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,3.94fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
@@ -9060,7 +8836,7 @@ export default function ArbitrageScanner({
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
                   no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
                   enough to wrap at a normal width. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 {/* 1 — counts */}
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
@@ -9141,7 +8917,7 @@ export default function ArbitrageScanner({
                 {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={

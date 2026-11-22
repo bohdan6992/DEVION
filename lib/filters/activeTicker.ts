@@ -184,6 +184,21 @@ const SNAPSHOT_TIMEOUT_MS = 1500;
  * Polling pauses while the tab is hidden: a background tab hammering the bridge once every two
  * seconds, on every open scanner, is load nobody asked for.
  */
+/**
+ * The card's fields from the TAPE, for when the live read cannot answer (GET /api/tape/ticker-card). The live
+ * snapshot asks TradingApp for quotes and hangs on a bridge whose market-data side is down; the tape is read
+ * from disk and answers anyway. Numbers are rounded for the strip - the tape carries full float precision.
+ */
+async function loadTapeCard(tk: string, signal: AbortSignal): Promise<Record<string, any> | null> {
+  const r = await fetch(bridgeUrl(`/api/tape/ticker-card?ticker=${encodeURIComponent(tk)}`), { signal });
+  if (!r.ok) return null;
+  const j = await r.json();
+  const f = j?.fields;
+  if (!f || typeof f !== "object") return null;
+  const round = (v: any, d: number) => (typeof v === "number" && Number.isFinite(v) ? Number(v.toFixed(d)) : v);
+  return { ...f, Beta: round(f.Beta, 3), Sig: round(f.Sig, 3), "SpreadBid%": round(f["SpreadBid%"], 3), "LstPrcLstClsΔ%": round(f["LstPrcLstClsΔ%"], 2) };
+}
+
 export function useActiveTickerSnapshot(ticker: string | null): ActiveTickerSnapshot {
   const [state, setState] = useState<ActiveTickerSnapshot>({ fields: null, loading: false, error: null });
 
@@ -196,6 +211,7 @@ export function useActiveTickerSnapshot(ticker: string | null): ActiveTickerSnap
 
     let cancelled = false;
     let inFlight = false;
+    const tapeTried = new Set<string>();
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
     const load = () => {
@@ -234,6 +250,20 @@ export function useActiveTickerSnapshot(ticker: string | null): ActiveTickerSnap
             loading: false,
             error: prev.fields ? null : msg,
           }));
+          // Nothing to show yet: fill the card from the tape instead of leaving it empty. The live read keeps
+          // polling, and replaces these as soon as it answers.
+          if (!tapeTried.has(tk)) {
+            tapeTried.add(tk);
+            const tctl = new AbortController();
+            const tkill = window.setTimeout(() => tctl.abort(), 4000);
+            loadTapeCard(tk, tctl.signal)
+              .then((fields) => {
+                if (cancelled || !fields) return;
+                setState((prev) => (prev.fields ? prev : { fields, loading: false, error: null }));
+              })
+              .catch(() => { tapeTried.delete(tk); })
+              .finally(() => window.clearTimeout(tkill));
+          }
         })
         .finally(() => {
           window.clearTimeout(killer);
@@ -255,4 +285,40 @@ export function useActiveTickerSnapshot(ticker: string | null): ActiveTickerSnap
   }, [ticker]);
 
   return state;
+}
+
+/**
+ * Clicking a row of any table on a scanner page makes that row's ticker the active one (the operator's own
+ * instruction, 2026-11-22: the strip under the filters must show the SELECTED ticker). The Sonar tables do
+ * this with their own onClick; the scanner has ~20 hand-written result tables and no shared row component,
+ * so this is ONE delegated listener instead of an onClick in each - it reads the first of a row's leading
+ * cells that looks like a ticker (upper-case symbol, optional class suffix such as BRK.B) and calls
+ * setActiveTicker, exactly as a Sonar row click does.
+ *
+ * Clicks on buttons, links and inputs inside the row are left alone (they have their own meaning), and a click
+ * that ends a text selection is ignored so copying a ticker does not retarget the card.
+ */
+const TICKER_RE = /^[A-Z][A-Z0-9]{0,5}(?:[.\-][A-Z0-9]{1,2})?$/;
+
+export function useRowTickerSelect(strategy: ActiveTickerStrategy): void {
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t || typeof t.closest !== "function") return;
+      if (t.closest("button, a, input, select, textarea, label, [role='menu'], [role='tooltip']")) return;
+      const tr = t.closest("tbody tr");
+      if (!tr) return;
+      if (String(window.getSelection?.() ?? "").trim()) return;
+      const cells = Array.from(tr.children).slice(0, 4);
+      for (const c of cells) {
+        const txt = (c.textContent ?? "").trim();
+        if (TICKER_RE.test(txt)) {
+          setActiveTicker(strategy, txt);
+          return;
+        }
+      }
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, [strategy]);
 }

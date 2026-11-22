@@ -94,7 +94,7 @@ const OWNED_CLASS_STRINGS = [
     constant: "TOOLBAR_BUTTON_BASE",
     text: "inline-flex h-7 items-center justify-center px-3 py-1.5 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
   },
-  { constant: "FILTER_GROUP_BASE", text: "inline-flex items-center gap-2 rounded-xl border p-1.5" },
+  { constant: "FILTER_GROUP_BASE", text: "inline-flex items-center gap-2 rounded-xl border p-0.5" },
   {
     constant: "FILTER_PILL",
     text: "inline-flex h-7 items-center justify-center rounded-lg border px-3 py-0 text-[10px] font-mono font-bold uppercase leading-none transition-all",

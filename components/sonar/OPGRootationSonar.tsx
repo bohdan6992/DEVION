@@ -4411,7 +4411,7 @@ export default function OPGRootationSonar() {
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title="Live trigger: minimum |% move DOWN| from the 09:30 anchor price required to fire a SHORT. Coral = short.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#f3a6b2]/50" title="Live trigger: minimum |% move DOWN| from the 09:30 anchor price required to fire a SHORT. Coral = short.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4419,7 +4419,7 @@ export default function OPGRootationSonar() {
                     min={0}
                     value={opgRootationMinDevAbsShort}
                     onChange={(e) => setOPGRootationMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4442,7 +4442,7 @@ export default function OPGRootationSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title="Live trigger: minimum |% move UP| from the 09:30 anchor price required to fire a LONG. Empty = same value as the short one. Mint = long.">
+                <div className="group relative h-7 w-14 rounded-md border border-[#6ee7b7]/45" title="Live trigger: minimum |% move UP| from the 09:30 anchor price required to fire a LONG. Empty = same value as the short one. Mint = long.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4451,7 +4451,7 @@ export default function OPGRootationSonar() {
                     value={opgRootationMinDevAbsLong}
                     onChange={(e) => setOPGRootationMinDevAbsLong(e.target.value)}
                     placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4480,7 +4480,7 @@ export default function OPGRootationSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title="Live trigger: shared max cap on |% move| from the 09:30 anchor, either side (empty = none) — a move bigger than this is treated as an anomaly for that tick. Silver = the ceiling.">
+                <div className="group relative h-7 w-14 rounded-md border border-zinc-200/35" title="Live trigger: shared max cap on |% move| from the 09:30 anchor, either side (empty = none) — a move bigger than this is treated as an anomaly for that tick. Silver = the ceiling.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4489,7 +4489,7 @@ export default function OPGRootationSonar() {
                     value={opgRootationMinDevAbsMax}
                     onChange={(e) => setOPGRootationMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -4512,7 +4512,7 @@ export default function OPGRootationSonar() {
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-amber-400/55" title="Live trigger: floor an already-fired, not-yet-filled ticker's |% move| must stay above. A fill can take 3-4 minutes; if the move shrinks back under this before the position opens, the pending order is cancelled (ticker + Ctrl+L). 0 = off. Amber = the cancel floor.">
+                <div className="group relative h-7 w-14 rounded-md border border-amber-400/55" title="Live trigger: floor an already-fired, not-yet-filled ticker's |% move| must stay above. A fill can take 3-4 minutes; if the move shrinks back under this before the position opens, the pending order is cancelled (ticker + Ctrl+L). 0 = off. Amber = the cancel floor.">
                   <input
                     type="number"
                     inputMode="decimal"
@@ -4520,7 +4520,7 @@ export default function OPGRootationSonar() {
                     min={0}
                     value={opgRootationCancelBelowMovePct}
                     onChange={(e) => setOPGRootationCancelBelowMovePct(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button

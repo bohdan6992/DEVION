@@ -273,6 +273,8 @@ export const RANGE_PRESET_OPTIONS: GlassSelectOption[] = [
   { value: "15d", label: "15 DAYS" },
   { value: "20d", label: "20 DAYS" },
   { value: "30d", label: "30 DAYS" },
+  { value: "60d", label: "60 DAYS" },
+  { value: "90d", label: "90 DAYS" },
 ];
 
 export const OPTIMIZER_RANK_METRIC_OPTIONS: GlassSelectOption[] = [
@@ -320,6 +322,10 @@ export const SCOPE_PARAMETER_DEFINITIONS: ScopeParameterDefinition[] = [
   { key: "sectorL5", label: "SECTOR L5", group: "RATING GATES", kind: "categorical" },
   { key: "bench", label: "BENCH", group: "RATING GATES", kind: "categorical" },
   { key: "startabs", label: "START", group: "ZAP THRESHOLDS", scenarioParameter: null },
+  // MARKET TYPE (2026-11-22, the operator's own instruction): the strategy's results grouped by the type of
+  // the DAY each trade was taken on (PANIC .. EUPHORIA, read from the tape at 09:19 ET). Categorical and
+  // built client-side from the rows' own dates - see buildMarketTypeOptimizerParameter. Shown under EVENT FILTERS.
+  { key: "marketType", label: "MARKET TYPE", group: "ZAP THRESHOLDS", kind: "categorical" },
   // PairFlux measures a pair through its whole life, so it reports four moments where a
   // single-ticker strategy reports two: the entry, the widest point, the detection reading at the
   // exit bar, and the OPPOSITE-side reading the exit threshold was actually compared against.

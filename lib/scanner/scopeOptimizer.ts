@@ -602,3 +602,21 @@ export function scoreTailDamage(param: PaperArbOptimizerParameterDto, minTrades:
       .reduce((s, b) => s + Math.abs(b.totalPnlUsd), 0);
   return tailLoss(param.lowerTailBuckets ?? []) + tailLoss(param.upperTailBuckets ?? []);
 }
+
+
+/**
+ * SCOPE's MARKET TYPE group: the strategy's results split by the type of the DAY each trade was taken on.
+ * `byDay` is the bridge's day -> label map (GET /api/market-type/days); a row whose day is not in it falls into
+ * UNKNOWN - the same bucket the bridge uses for a session nobody measured - rather than disappearing.
+ * Returns null while there is nothing to group (no rows), like every categorical builder here.
+ */
+export function buildMarketTypeOptimizerParameter(
+  rows: PaperArbClosedDto[],
+  group: OptimizerRangeGroupKey,
+  byDay: Readonly<Record<string, string>>
+): PaperArbOptimizerParameterDto | null {
+  return buildCategoricalOptimizerParameter(rows, "marketType", "MARKET TYPE", group, (row) => {
+    const d = String(row.dateNy ?? "").slice(0, 10);
+    return byDay[d] ?? "UNKNOWN";
+  });
+}

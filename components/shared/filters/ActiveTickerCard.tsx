@@ -95,12 +95,20 @@ export default function ActiveTickerCard({
   children,
 }: ActiveTickerCardProps) {
   const disabled = !ticker;
+  const hasBody = !!children && (!collapsed || !collapsed.value);
 
   return (
     <div className="relative overflow-hidden border border-white/10 rounded-2xl bg-black/40 animate-in fade-in zoom-in-95 duration-300">
       <div className={`absolute inset-y-0 left-0 w-px ${accentLineClass}`} />
-      <div className="relative flex flex-col gap-3 px-4 py-3 border-b border-white/10 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0 flex flex-col gap-2 lg:justify-center">
+      <div
+        className={[
+          // 32px + the card's 1px borders = 34px, the height of every toolbar group above it (the operator's own
+          // instruction, 2026-11-22: this strip must be as tall as the wrappers). py-0.5 around the h-7 buttons.
+          "relative flex min-h-[32px] flex-col gap-3 px-4 py-0.5 lg:flex-row lg:items-center lg:justify-between",
+          hasBody ? "border-b border-white/10" : "",
+        ].join(" ")}
+      >
+        <div className="min-w-0 flex flex-col gap-1 lg:justify-center">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className="text-lg leading-none font-mono font-semibold tracking-[0.08em] text-white">
               {ticker ?? "-"}
@@ -113,18 +121,19 @@ export default function ActiveTickerCard({
                 </span>
               ))}
             </div>
+
+            {loading && (
+              <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500 animate-pulse">
+                loading data stream...
+              </div>
+            )}
+            {error && (
+              <div className="w-fit rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-0.5 text-[11px] font-mono text-rose-300">
+                {error}
+              </div>
+            )}
           </div>
 
-          {loading && (
-            <div className="text-[10px] font-mono uppercase tracking-[0.14em] text-zinc-500 animate-pulse">
-              loading data stream...
-            </div>
-          )}
-          {error && (
-            <div className="w-fit text-[11px] text-rose-300 font-mono bg-rose-500/10 px-2 py-1 border border-rose-500/20">
-              {error}
-            </div>
-          )}
         </div>
 
         {/* Three independent children; with none of them present this row is an EMPTY flex

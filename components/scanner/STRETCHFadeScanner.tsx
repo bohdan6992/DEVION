@@ -81,7 +81,7 @@ import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValu
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
 import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
-import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage } from "../../lib/scanner/scopeOptimizer";
+import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
 import { SCOPE_OPTIMIZER_MAX_BINS, SCOPE_OPTIMIZER_MIN_BINS } from "../../lib/scanner/types";
@@ -97,10 +97,16 @@ import ScannerHeader from "./shell/panels/ScannerHeader";
 import ActiveTickerCard from "../shared/filters/ActiveTickerCard";
 import FilterFlagsRow from "../shared/filters/FilterFlagsRow";
 import { FILTER_GROUP_BASE, FILTER_GROUP_TONES, FILTER_PILL, TOOLBAR_BUTTON_ACTIVE, TOOLBAR_BUTTON_BASE, TOOLBAR_BUTTON_INACTIVE } from "../shared/filters/styles";
-import { useActiveTickerSelection, useActiveTickerSnapshot } from "../../lib/filters/activeTicker";
+import { useActiveTickerSelection, useActiveTickerSnapshot, useRowTickerSelect } from "../../lib/filters/activeTicker";
 import SharedMinMaxPanel from "./shell/panels/SharedMinMaxPanel";
 import TickerListDrawers from "./shell/panels/TickerListDrawers";
 import ExecutionSettingsPanel from "./shell/panels/ExecutionSettingsPanel";
+import ScannerControlCard from "./shell/panels/ScannerControlCard";
+import { ScannerRateButton, ScannerStatsButton, useStatsToggle } from "../shared/filters/ScannerToggleButtons";
+import { ScannerMarketControl, useMarketFilter } from "../shared/filters/ScannerMarketControl";
+import { parseMarketTypes } from "../../lib/marketType";
+import { RatingModeMenu, useRatingModes } from "./OPGReversalRatingMenu";
+import { useMarketTypeByDay } from "../../lib/scanner/useMarketTypeByDay";
 /**
  * THE SIGNAL AXIS IS ALREADY IN SIGMAS, which is why this list is three long and not six.
  *
@@ -850,6 +856,9 @@ export default function StretchFadeScanner({
   // which PairFlux/every strategy's tape row already carry).
   const [minGamma, setMinGamma] = useState("");
   const [maxGamma, setMaxGamma] = useState("");
+  const { statsOn, toggleStats } = useStatsToggle({ minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma }, { minSigma: setMinSigma, maxSigma: setMaxSigma, minAlpha: setMinAlpha, maxAlpha: setMaxAlpha, minGamma: setMinGamma, maxGamma: setMaxGamma });
+  const { marketTypes, setMarketTypes, marketOn, setMarketOn } = useMarketFilter();
+  const { ratingsMode, setRatingsMode, ratingsFrozen, setRatingsFrozen, coreOnly, setCoreOnly } = useRatingModes();
   // Mirrors ArbitrageScanner's own bumpStartAbsMax exactly: the max-cap field is a string (so it can
   // be empty = no cap), but its arrow buttons still need a numeric base to bump from, falling back to
   // the short-side floor when the field is empty.
@@ -1469,7 +1478,7 @@ export default function StretchFadeScanner({
     minNewsCnt, maxNewsCnt,
     requireHasNews, excludeHasNews, requireHasReport, excludeHasReport, includeUSA, includeChina,
     requireIsPTP, requireIsSSR, requireIsETF, requireIsCrap,
-    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap,
+    excludeDividend, excludePTP, excludeSSR, excludeETF, excludeCrap, marketTypes, marketOn, ratingsMode, ratingsFrozen, coreOnly,
   ]);
 
   // ========= Preflight validation
@@ -1682,7 +1691,7 @@ export default function StretchFadeScanner({
     return pool.filter((d) => !toYmd(dateFrom) || d >= dateFrom).map((d) => ({ value: d, label: d }));
   }, [sortedDaysDesc, dateFrom, dateTo]);
 
-  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d") => {
+  const applyRangePreset = (preset: "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d") => {
     setDateMode("last");
     if (tab === "episodes") setEpisodesUseSearch(true);
     setRangePreset(preset);
@@ -1691,7 +1700,9 @@ export default function StretchFadeScanner({
       preset === "5d" ? 5 :
       preset === "10d" ? 10 :
       preset === "15d" ? 15 :
-      preset === "20d" ? 20 : 30;
+      preset === "20d" ? 20 :
+      preset === "30d" ? 30 :
+      preset === "60d" ? 60 : 90;
     const end = sortedDaysAsc[sortedDaysAsc.length - 1] ?? todayNyYmd();
     if (!sortedDaysAsc.length) {
       setDateTo(end);
@@ -1894,7 +1905,12 @@ export default function StretchFadeScanner({
         applyStr(s.minTierBp, setMinTierBp); applyStr(s.maxTierBp, setMaxTierBp);
         applyStr(s.minCorr, setMinCorr); applyStr(s.maxCorr, setMaxCorr);
         applyStr(s.minBeta, setMinBeta); applyStr(s.maxBeta, setMaxBeta);
-        applyStr(s.minSigma, setMinSigma); applyStr(s.maxSigma, setMaxSigma);
+        applyStr(s.minSigma, setMinSigma);
+        if (Array.isArray(s.marketTypes)) setMarketTypes(parseMarketTypes(s.marketTypes));
+        if (typeof s.marketOn === "boolean") setMarketOn(s.marketOn);
+        if (s.ratingsMode === "live" || s.ratingsMode === "asof" || s.ratingsMode === "asofew") setRatingsMode(s.ratingsMode);
+        if (typeof s.ratingsFrozen === "boolean") setRatingsFrozen(s.ratingsFrozen);
+        if (typeof s.coreOnly === "boolean") setCoreOnly(s.coreOnly); applyStr(s.maxSigma, setMaxSigma);
         applyStr(s.minAlpha, setMinAlpha); applyStr(s.maxAlpha, setMaxAlpha);
         applyStr(s.minGamma, setMinGamma); applyStr(s.maxGamma, setMaxGamma);
         applyStr(s.minMarketCapM, setMinMarketCapM); applyStr(s.maxMarketCapM, setMaxMarketCapM);
@@ -2062,6 +2078,11 @@ export default function StretchFadeScanner({
       minBeta,
       maxBeta,
       minSigma,
+      marketTypes,
+      marketOn,
+      ratingsMode,
+      ratingsFrozen,
+      coreOnly,
       maxSigma,
       minAlpha,
       maxAlpha,
@@ -2222,7 +2243,7 @@ export default function StretchFadeScanner({
       minImbARCA, maxImbARCA,
       minImbExchValue, maxImbExchValue,
       stretchFadeExitClass, stretchFadeMinDevAbsShort, stretchFadeMinDevAbsLong, stretchFadeMinDevAbsMax,
-      stretchFadeMinRate, stretchFadeMinTotal, stretchFadeUnitMode, stretchFadeIgnoreRatings,
+      stretchFadeMinRate, stretchFadeMinTotal, stretchFadeUnitMode, stretchFadeIgnoreRatings, marketTypes, marketOn, ratingsMode, ratingsFrozen, coreOnly,
     ]
   );
 
@@ -2680,6 +2701,7 @@ export default function StretchFadeScanner({
   );
   // Active-ticker card: read-only follower of the Sonar's selection. See lib/filters/activeTicker.
   const activeSelection = useActiveTickerSelection(ACTIVE_TICKER_STRATEGY);
+  useRowTickerSelect(ACTIVE_TICKER_STRATEGY);
   const activeSnapshot = useActiveTickerSnapshot(activeSelection.ticker);
   const activeCardStats = useMemo(() => {
     const f = activeSnapshot.fields ?? {};
@@ -2981,6 +3003,10 @@ export default function StretchFadeScanner({
       // MINRATE/MINTOTAL/MinGammaTotal riding on it) entirely when on UNIVERSE, gating on the flat
       // floor/cap alone. Re-added 2026-09-25 (the operator's own instruction) — the earlier Γ/Ø
       // violet-strip toggle this used to be stayed removed; this is a new control in a new place.
+      ratingsMode,
+      ratingsFrozen,
+      coreOnly,
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       ignoreRatings: stretchFadeIgnoreRatings,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
@@ -3242,6 +3268,7 @@ export default function StretchFadeScanner({
       ratingType: ratingType ?? "any",
       ratingRules: ratingMode === "SESSION" ? rrForRequest : null,
 
+      marketTypes: marketOn && marketTypes.length ? marketTypes : null,
       tickers: reqTickers.length ? reqTickers : null,
       excludeTickers: requestExcludedTickers.length ? requestExcludedTickers : null,
       benchTickers: splitListUpper(scopeBenchText).length ? splitListUpper(scopeBenchText) : null,
@@ -3781,7 +3808,7 @@ export default function StretchFadeScanner({
     ruleBand,
     sharedRangeFilterModes,
     startAbsMax,
-    zapMode,
+    zapMode, marketTypes, marketOn, ratingsMode, ratingsFrozen, coreOnly,
   ]);
 
   const clearOptimizerFields = (req: PaperArbAnalyticsRequest) => {
@@ -4403,7 +4430,7 @@ export default function StretchFadeScanner({
   // (and so the raw fields it captured) has caught up.
   const rangeFilterBundle = useMemo(() => ({
     minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555,
-  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555]);
+  }), [minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, minAlpha, maxAlpha, minGamma, maxGamma, minAdv20, maxAdv20, minAdv20NF, maxAdv20NF, minAdv90, maxAdv90, minAdv90NF, maxAdv90NF, minAvPreMhv, maxAvPreMhv, minRoundLot, maxRoundLot, minVWAP, maxVWAP, minSpread, maxSpread, minLstPrcL, maxLstPrcL, minLstCls, maxLstCls, minYCls, maxYCls, minTCls, maxTCls, minClsToClsPct, maxClsToClsPct, minLo, maxLo, minLstClsNewsCnt, maxLstClsNewsCnt, minMarketCapM, maxMarketCapM, minPreMktVolNF, maxPreMktVolNF, minVolNFfromLstCls, maxVolNFfromLstCls, minAvPostMhVol90NF, maxAvPostMhVol90NF, minAvPreMhVol90NF, maxAvPreMhVol90NF, minAvPreMhValue20NF, maxAvPreMhValue20NF, minAvPreMhValue90NF, maxAvPreMhValue90NF, minAvgDailyValue20, maxAvgDailyValue20, minAvgDailyValue90, maxAvgDailyValue90, minVolatility20, maxVolatility20, minVolatility90, maxVolatility90, minPreMhMDV20NF, maxPreMhMDV20NF, minPreMhMDV90NF, maxPreMhMDV90NF, minVolRel, maxVolRel, minPreMhBidLstPrcPct, maxPreMhBidLstPrcPct, minPreMhLoLstPrcPct, maxPreMhLoLstPrcPct, minPreMhHiLstClsPct, maxPreMhHiLstClsPct, minPreMhLoLstClsPct, maxPreMhLoLstClsPct, minLstPrcLstClsPct, maxLstPrcLstClsPct, minImbExch925, maxImbExch925, minImbExch1555, maxImbExch1555, marketTypes, marketOn, ratingsMode, ratingsFrozen, coreOnly]);
   const deferredRangeFilterBundle = React.useDeferredValue(rangeFilterBundle);
 
   // ========= Client-side filters
@@ -4562,6 +4589,7 @@ export default function StretchFadeScanner({
       return true;
     });
   }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   // The SNAPSHOT table predates the shared row shape and reads StretchFade's own field names, so
   // translate once here rather than in every cell. No bid/ask crossing and no bench leg: entry and
@@ -4865,7 +4893,7 @@ export default function StretchFadeScanner({
       .finally(() => {
         setArbitrageTickerMetaLoading(false);
       });
-  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma]);
+  }, [optimizerRanges, episodesRows, activeRows, scopeSelectedParameterKeys, minCorr, maxCorr, minBeta, maxBeta, minSigma, maxSigma, marketTypes, marketOn, ratingsMode, ratingsFrozen, coreOnly]);
 
   const cmpVal = (a: string | number, b: string | number) => {
     if (typeof a === "number" && typeof b === "number") return a - b;
@@ -5279,6 +5307,7 @@ export default function StretchFadeScanner({
             // BenchTicker to "" since StretchFade has no hedge leg (the same reason benchPnlUsd/
             // hedgedPnlUsd are already excluded from scope RESULTS below) — the axis could only ever
             // render one empty-string bucket, which looks exactly like a broken parameter.
+            if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
             if (catParam) catResults.push(catParam);
             return null;
           }
@@ -5348,6 +5377,7 @@ export default function StretchFadeScanner({
         }
         // "bench" deliberately NOT built here — see the same skip's own comment above, in this
         // function's useBinRatingFilter branch.
+        if (definition.key === "marketType") catParam = buildMarketTypeOptimizerParameter(filteredEpisodes, definition.group, marketTypeByDayRef.current);
         if (catParam) parameterMap.set(definition.key, catParam);
         continue;
       }
@@ -6165,21 +6195,11 @@ export default function StretchFadeScanner({
               just a single solid-colored button here instead of a pill pair: gold "RATE" while
               ratings are applied, red "UNIVERSE" once they are dropped. Sits immediately before the
               two pills it visibly governs (grayed out below when UNIVERSE is active), not after. */}
-          <button
-            type="button"
-            onClick={() => setStretchFadeIgnoreRatings((v) => !v)}
-            title={stretchFadeIgnoreRatings
-              ? "UNIVERSE — ratings dropped: gate on the flat floor/cap alone. Click to apply ratings again."
-              : "RATE — ratings applied: MINRATE/MINTOTAL enforced on the ticker’s own published (class, sign) cell. STRETCH•FADE's gamma IS a qualifying level here (the lowest ZAP SIG at which the ticker has actually paid, in sigmas) and starts at the 1σ trigger, because nothing below that is in the trade log at all. Click to drop ratings (UNIVERSE)."}
-            className={clsx(
-              "flex h-7 items-center justify-center rounded-lg px-3 text-[10px] font-mono font-bold uppercase tracking-wide leading-none transition-all",
-              stretchFadeIgnoreRatings
-                ? "bg-rose-500 text-white shadow-[0_0_16px_rgba(244,63,94,0.36)]"
-                : "bg-amber-500 text-black shadow-[0_0_16px_rgba(245,158,11,0.36)]"
-            )}
-          >
-            {stretchFadeIgnoreRatings ? "UNIVERSE" : "RATE"}
-          </button>
+          <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} />
+          <ScannerRateButton ignoreRatings={stretchFadeIgnoreRatings} onToggle={() => setStretchFadeIgnoreRatings((v) => !v)} />
+          {!stretchFadeIgnoreRatings && (
+            <RatingModeMenu mode={ratingsMode} setMode={setRatingsMode} frozen={ratingsFrozen} setFrozen={setRatingsFrozen} core={coreOnly} setCore={setCoreOnly} />
+          )}
 
           {/* MINRATE/MINTOTAL: real bridge-side gate on the (class, sign) cell's own published
               win_rate/total (StretchFadeGate.cs), reaching StretchFadeGate.Check via buildStretchFadeParams.
@@ -6191,6 +6211,7 @@ export default function StretchFadeScanner({
               concept at all) — removed. Grayed out (not disabled — still editable, since RATE can be
               flipped back on at any time) while RATE/UNIVERSE reads UNIVERSE, since the bridge drops
               both floors under ignoreRatings regardless of what is typed into them. */}
+          {!stretchFadeIgnoreRatings && (
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
             stretchFadeIgnoreRatings && "opacity-40"
@@ -6229,7 +6250,9 @@ export default function StretchFadeScanner({
               </div>
             </div>
           </div>
+          )}
 
+          {!stretchFadeIgnoreRatings && (
           <div className={clsx(
             "flex h-7 items-center gap-2 pl-3 pr-0 rounded-lg bg-black/45 transition-opacity",
             stretchFadeIgnoreRatings && "opacity-40"
@@ -6267,6 +6290,7 @@ export default function StretchFadeScanner({
               </div>
             </div>
           </div>
+          )}
 
           {/* σ/α/γ — the black ρ/β/σ-style min/max boxes, brought back with StretchFade's OWN static
               values (not Arbitrage's arbitrageTickerMetaByTicker corr/beta/sigma the old ρ/β/σ read).
@@ -6276,7 +6300,8 @@ export default function StretchFadeScanner({
               (rides Rating, same slot the table's own γ column reads). These are a DIFFERENT kind of
               filter than MINRATE/MINTOTAL above: a floor/ceiling on a STATIC published value, not a
               threshold on the trade's own win_rate. */}
-          {[
+          <ScannerStatsButton on={statsOn} onToggle={toggleStats} />
+          {statsOn && [
             { label: "σ", title: "Sigma — the ticker's published static Stack% dispersion", minValue: minSigma, maxValue: maxSigma, setMin: setMinSigma, setMax: setMaxSigma, step: 0.1 },
             { label: "α", title: "Alpha — the RMS of how this ticker stood at THIS class’s checkpoint, sign-matched. Per class, not per ticker.", minValue: minAlpha, maxValue: maxAlpha, setMin: setMinAlpha, setMax: setMaxAlpha, step: 0.1 },
             { label: "γ", title: "Gamma — the (class, sign) stretchFade-entry level this row actually cleared", minValue: minGamma, maxValue: maxGamma, setMin: setMinGamma, setMax: setMaxGamma, step: 0.1 },
@@ -6348,184 +6373,34 @@ export default function StretchFadeScanner({
         </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/50 p-3 shadow-xl backdrop-blur-md transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/70">
-          
-            <div className="flex h-7 items-center gap-2">
-              {[
-                ...OPGSTRETCH_EXIT_CLASSES,
-              ].map((b) => (
-                <button
-                  key={b.key}
-                  type="button"
-                  onClick={() => setStretchFadeExitClass(b.key as "exit0930")}
-                  className={clsx(
-                    TOOLBAR_BUTTON_BASE,
-                    stretchFadeExitClass === b.key
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : TOOLBAR_BUTTON_INACTIVE
-                  )}
-                >
-                  {b.label}
-                </button>
-                ))}
-            </div>
-
-            <div className="flex-1" />
-
-            <div className="flex h-7 items-center gap-2 pl-3 pr-2 rounded-lg bg-black/20">
-              <span className="flex h-7 items-center text-[10px] font-mono text-zinc-500 uppercase tracking-wide">PRESET</span>
-              {scannerPresetSaveMode ? (
-                <input
-                  type="text"
-                  value={scannerPresetDraftName}
-                  onChange={(e) => setScannerPresetDraftName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      setScannerPresetSaveMode(false);
-                      setScannerPresetDraftName("");
-                    }
-                  }}
-                  autoFocus
-                  placeholder="NAME..."
-                  className="h-7 min-w-[112px] bg-transparent border-0 text-[10px] font-mono uppercase text-zinc-300 placeholder:text-zinc-600 outline-none focus:outline-none"
-                />
-              ) : (
-                <GlassSelect
-                  value={scannerPresetId}
-                  onChange={async (e) => {
-                    const nextId = e.target.value;
-                    setScannerPresetId(nextId);
-                    if (!nextId) {
-                      clearScannerSharedFilters();
-                      return;
-                    }
-                    if (scannerPresetBusy || scannerPresetSaveMode) return;
-                    setScannerPresetBusy(true);
-                    try {
-                      const preset = getSharedFilterLocalPreset(nextId);
-                      if (preset && applyScannerPreset(preset)) return;
-                      const fallbackPreset = scannerPresets.find((x) => x.id === nextId);
-                      if (fallbackPreset && applyScannerPreset(fallbackPreset)) return;
-                      setScannerPresetStatus("Apply failed");
-                    } catch {
-                      setScannerPresetStatus("Apply failed");
-                    } finally {
-                      setScannerPresetBusy(false);
-                    }
-                  }}
-                  options={[
-                    { value: "", label: "NONE" },
-                    ...scannerPresets.map((preset) => ({
-                      value: preset.id,
-                      label: preset.name.toUpperCase(),
-                    })),
-                  ]}
-                  compact
-                  panelOffsetX={-42}
-                  panelWidth={124}
-                  className="w-[92px] !h-7 !min-w-0 !rounded-none !border-transparent !bg-transparent !px-0 !py-0 !text-xs !leading-none !shadow-none hover:!bg-transparent hover:!border-transparent focus:!border-transparent"
-                />
-              )}
+        <ScannerControlCard
+          filters={scannerFilters}
+          presetId={scannerPresetId}
+          setPresetId={setScannerPresetId}
+          saveCurrentScannerPreset={saveCurrentScannerPreset}
+          applyScannerPreset={applyScannerPreset}
+          clearScannerSharedFilters={clearScannerSharedFilters}
+        >
+          <div className="flex h-7 items-center gap-2">
+            {[
+              ...OPGSTRETCH_EXIT_CLASSES,
+            ].map((b) => (
               <button
+                key={b.key}
                 type="button"
-                onClick={() => {
-                  if (scannerPresetSaveMode) {
-                    if (!scannerPresetBusy) void saveCurrentScannerPreset(scannerPresetDraftName);
-                    return;
-                  }
-                  setScannerPresetSaveMode(true);
-                  setScannerPresetDraftName("");
-                }}
-                disabled={scannerPresetBusy}
+                onClick={() => setStretchFadeExitClass(b.key as "exit0930")}
                 className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetBusy
-                    ? "border-transparent text-zinc-600"
-                    : scannerPresetSaveMode
-                      ? TOOLBAR_BUTTON_ACTIVE
-                      : "border-transparent text-zinc-400 hover:text-white hover:bg-white/5"
+                  TOOLBAR_BUTTON_BASE,
+                  stretchFadeExitClass === b.key
+                    ? TOOLBAR_BUTTON_ACTIVE
+                    : TOOLBAR_BUTTON_INACTIVE
                 )}
               >
-                SAVE
+                {b.label}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode) return;
-                  const ok = deleteSharedFilterLocalPreset(scannerPresetId);
-                  if (!ok) {
-                    setScannerPresetStatus("Delete failed");
-                    return;
-                  }
-                  const items = listSharedFilterLocalPresets().filter((x) => {
-                    if (x.scope !== "BOTH") return false;
-                    try {
-                      return isSharedFilterPreset(JSON.parse(x.configJson ?? "{}"));
-                    } catch {
-                      return false;
-                    }
-                  });
-                  setScannerPresets(items);
-                  setScannerPresetId(items[0]?.id ?? "");
-                  setScannerPresetStatus("Deleted");
-                }}
-                disabled={!scannerPresetId || scannerPresetBusy || scannerPresetSaveMode}
-                className={clsx(
-                  "inline-flex h-7 items-center justify-center px-2 rounded-lg text-[10px] font-mono font-bold uppercase leading-none transition-all border",
-                  scannerPresetId && !scannerPresetBusy && !scannerPresetSaveMode
-                    ? "border-transparent text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
-                    : "border-transparent text-zinc-600"
-                )}
-              >
-                DEL
-              </button>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowSharedMinMax((v) => !v)}
-              className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-300 hover:bg-white/10 transition-colors group"
-              title={showSharedMinMax ? "Hide shared filters" : "Show shared filters"}
-            >
-              {showSharedMinMax ? (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="group-hover:text-rose-400 transition-colors"
-                >
-                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                  <line x1="1" y1="1" x2="23" y2="23"></line>
-                </svg>
-              ) : (
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              )}
-            </button>
-        </div>
+              ))}
+          </div>
+        </ScannerControlCard>
 
         {showSharedMinMax && (
           <SharedMinMaxPanel
@@ -6643,7 +6518,7 @@ export default function StretchFadeScanner({
                   POSITION/COLOR — coral/mint/silver/amber in the same startAbs/startAbsNeg/
                   startAbsMax/MinGammaTotal roles as before, per the Spinner Input Standard — but the
                   first three now MEAN "N × this ticker's own σ/α/γ" whenever the unit toggle is off %. */}
-              <div className="inline-flex items-center gap-2 rounded-xl border p-1.5 border-violet-500/20 bg-violet-500/[0.06]">
+              <div className="inline-flex items-center gap-2 rounded-xl border p-0.5 border-violet-500/20 bg-violet-500/[0.06]">
                 {([
                   { key: "sig", label: "σ", title: "Raw ZAP SIG (default) — SHORT/LONG/MAX and the add STEP entered as flat sigmas, the signal's own unit. This is final.parquet's dev_sig column: the benchmark-relative stretch already divided by the ticker's own rolling dispersion. The operator's rule, \"відхилення більше 1 сігма\", is stated in exactly this unit.", disabled: false },
                   { key: "alpha", label: "α", title: "SHORT/LONG/MAX and the add STEP entered as a multiple of each ticker's own published alpha, sign-matched — resolved per ticker server-side. Alpha is itself in sigmas here (compute_alpha runs over ZAP SIG readings), so this ratio is dimensionless.", disabled: false },
@@ -6674,7 +6549,7 @@ export default function StretchFadeScanner({
                   );
                 })}
 
-                <div className="group relative w-[78px] rounded-md border border-[#f3a6b2]/50" title={`Floor on |ZAP SIG| for a POSITIVE reading, which is taken SHORT (the stock has stretched UP away from its benchmark), entered in ${stretchFadeThresholdUnitLabel}. Strict >, so a reading of exactly this value does not trade. The first minute inside 09:15-09:21 that clears it AND has a price is the FILL. Coral = short.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-[#f3a6b2]/50" title={`Floor on |ZAP SIG| for a POSITIVE reading, which is taken SHORT (the stock has stretched UP away from its benchmark), entered in ${stretchFadeThresholdUnitLabel}. Strict >, so a reading of exactly this value does not trade. The first minute inside 09:15-09:21 that clears it AND has a price is the FILL. Coral = short.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6682,7 +6557,7 @@ export default function StretchFadeScanner({
                     min={0}
                     value={stretchFadeMinDevAbsShort}
                     onChange={(e) => setStretchFadeMinDevAbsShort(Math.max(0, clampNumber(e.target.value, 0)))}
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6705,7 +6580,7 @@ export default function StretchFadeScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-[#6ee7b7]/45" title={`Floor on |ZAP SIG| for a NEGATIVE reading, which is taken LONG, entered in ${stretchFadeThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-[#6ee7b7]/45" title={`Floor on |ZAP SIG| for a NEGATIVE reading, which is taken LONG, entered in ${stretchFadeThresholdUnitLabel}. Empty = the same threshold as the short one. Mint = long.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6714,7 +6589,7 @@ export default function StretchFadeScanner({
                     value={stretchFadeMinDevAbsLong}
                     onChange={(e) => setStretchFadeMinDevAbsLong(e.target.value)}
                     placeholder="as short"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6743,7 +6618,7 @@ export default function StretchFadeScanner({
                     </button>
                   </div>
                 </div>
-                <div className="group relative w-[78px] rounded-md border border-zinc-200/35" title={`Upper cap on |ZAP SIG|, either side (empty = none), entered in ${stretchFadeThresholdUnitLabel}. This is a DATA guard, not position sizing: a reading past ~200 is a sigma near zero dividing a real deviation, not a 200-sigma event. Silver = the ceiling.`}>
+                <div className="group relative h-7 w-14 rounded-md border border-zinc-200/35" title={`Upper cap on |ZAP SIG|, either side (empty = none), entered in ${stretchFadeThresholdUnitLabel}. This is a DATA guard, not position sizing: a reading past ~200 is a sigma near zero dividing a real deviation, not a 200-sigma event. Silver = the ceiling.`}>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -6752,7 +6627,7 @@ export default function StretchFadeScanner({
                     value={stretchFadeMinDevAbsMax}
                     onChange={(e) => setStretchFadeMinDevAbsMax(e.target.value)}
                     placeholder="no cap"
-                    className="center-spin w-full h-7 bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
+                    className="center-spin block w-full h-[26px] bg-black/20 border-0 rounded-md !pl-2 !pr-5 text-[11px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-0 focus:bg-black/30 transition-all active:scale-[0.99] font-mono tabular-nums text-center"
                   />
                   <div className="absolute right-[1px] top-[1px] bottom-[1px] w-4 border-l border-white/10 bg-transparent flex flex-col overflow-hidden rounded-r-[5px] opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto transition-opacity">
                     <button
@@ -6784,7 +6659,7 @@ export default function StretchFadeScanner({
             Wrapped at order-1 so it lands in the same band as the filter row above it: the column
             lays out by `order`, not by source, and at the default order-0 this strip floated to
             the top of the column, above the filters. */}
-        <div className="order-1">
+        <div className="order-3">
             <ActiveTickerCard
               ticker={activeSelection.ticker ?? null}
               stats={activeCardStats}
@@ -6805,7 +6680,7 @@ export default function StretchFadeScanner({
         <div className="flex items-center justify-between gap-2">
           {!isStreamOnlyShell && (
             <div className="flex items-center gap-2">
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {[
                   { key: "day", label: "DAY" },
                   { key: "last", label: "LAST" },
@@ -6856,7 +6731,7 @@ export default function StretchFadeScanner({
                   </button>
                 ))}
               </div>
-              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/20">
+              <div className="flex h-7 items-center gap-2 rounded-lg bg-black/45">
                 {dateMode === "day" ? (
                   <div ref={daySelectWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
@@ -6878,7 +6753,7 @@ export default function StretchFadeScanner({
                   <div ref={rangePresetWrapperRef} className="flex h-7 items-center rounded-lg px-1.5">
                     <GlassSelect
                       value={rangePreset}
-                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d")}
+                      onChange={(e) => applyRangePreset(e.target.value as "3d" | "5d" | "10d" | "15d" | "20d" | "30d" | "60d" | "90d")}
                       options={[
                         { value: "3d", label: "3 DAYS" },
                         { value: "5d", label: "5 DAYS" },
@@ -6886,6 +6761,8 @@ export default function StretchFadeScanner({
                         { value: "15d", label: "15 DAYS" },
                         { value: "20d", label: "20 DAYS" },
                         { value: "30d", label: "30 DAYS" },
+                        { value: "60d", label: "60 DAYS" },
+                        { value: "90d", label: "90 DAYS" },
                       ]}
                       className="!inline-flex !w-[90px] !min-w-[90px] !h-7 !py-0 !px-0 !gap-1 !bg-transparent !border-0 !rounded-lg !shadow-none !focus:border-0 text-zinc-300"
                       panelWidth={110}
@@ -6938,7 +6815,9 @@ export default function StretchFadeScanner({
           <div className="flex items-center gap-2">
           {primaryPanel !== "stream" && (
             <div className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 text-[10px] font-mono text-zinc-400 uppercase tracking-wide">
-              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>
+              {loading ? "Loading..." : "Idle"} | <span className="text-zinc-200">{variantShort}</span>{analyticsSummary.dayCount > 0 && (
+                <> | <span className="text-zinc-200">{intn(analyticsSummary.dayCount)} {analyticsSummary.dayCount === 1 ? "day" : "days"}</span></>
+              )}
             </div>
           )}
           </div>
@@ -7112,7 +6991,7 @@ export default function StretchFadeScanner({
           <div className="space-y-3">
             {/* TOTAL PNL keeps its own column; every other card shares ONE grid so they all get
                 the same track width. */}
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,6fr)]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(0,3.94fr)]">
               <div className="grid grid-cols-1 gap-3">
                 <SummaryMetricCard
                   label="TOTAL PNL"
@@ -7135,7 +7014,7 @@ export default function StretchFadeScanner({
                   Track widths are deliberately uneven — the counts are narrow because "31" needs
                   no room, MONEYFLOW and MAX DRAWDOWN are wide because their numbers are long
                   enough to wrap at a normal width. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 {/* 1 — counts */}
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
@@ -7216,7 +7095,7 @@ export default function StretchFadeScanner({
                 {/* 9 — MEDIAN DAY only over a range: on one day the median day IS the day. */}
                 <SummaryMetricCard label="PROFIT FACTOR" value={num(analyticsSummary.profitFactor, 2)} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={
@@ -8800,9 +8679,6 @@ export default function StretchFadeScanner({
         {primaryPanel === "scanner" && (tab === "analytics" || (isStreamOnlyShell && tab === "episodes")) && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">
-                STRETCH•FADE SNAPSHOT | live tape replay | {dateFrom}{dateFrom !== dateTo ? ` → ${dateTo}` : ""} | {OPGSTRETCH_SIGNAL_WINDOW_LABEL} → 09:30
-              </div>
               {stretchFadeSnapshotLoading && <span className="text-[10px] text-zinc-600 font-mono">building…</span>}
               {stretchFadeSnapshotError && <span className="text-[10px] text-rose-400 font-mono">{stretchFadeSnapshotError}</span>}
             </div>
@@ -8816,7 +8692,7 @@ export default function StretchFadeScanner({
                 ever showed a subset of what was already being computed one scroll down for the
                 equity curve. */}
             <div className="flex flex-col xl:flex-row gap-3">
-              <div className="w-full xl:w-[220px] xl:flex-shrink-0">
+              <div className="w-full xl:w-[calc(220px_+_(100%_-_328px)_*_0.0741)] xl:flex-shrink-0">
                 <SummaryMetricCard
                   label="TOTAL PNL ($)"
                   value={num(analyticsSummary.totalPnlUsd, 2)}
@@ -8834,7 +8710,7 @@ export default function StretchFadeScanner({
                 />
               </div>
               {/* Nine columns of two, filled column by column — same layout ArbitrageScanner uses. */}
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_4fr_2fr_2fr_2fr_2fr_2fr_2fr]">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-flow-col xl:grid-rows-2 xl:[grid-template-columns:1fr_1fr_2.6667fr_2fr_2fr_2fr_2fr_2fr_2fr]">
                 <SummaryMetricCard label="SITUATIONS" value={intn(analyticsSummary.situations)} inline />
                 <SummaryMetricCard label="LONGS" value={intn(analyticsSummary.longs)} inline valueClassName="text-[#6ee7b7]" />
 
@@ -8893,7 +8769,7 @@ export default function StretchFadeScanner({
 
                 <SummaryMetricCard label="PROFIT FACTOR" value={Number.isFinite(analyticsSummary.profitFactor) ? num(analyticsSummary.profitFactor, 2) : "∞"} inline />
                 <SummaryMetricCard
-                  label={analyticsSummary.dayCount > 1 ? `MEDIAN DAY (${intn(analyticsSummary.dayCount)}d)` : "MEDIAN DAY"}
+                  label="MEDIAN DAY"
                   value={analyticsSummary.dayCount > 1 ? num(analyticsSummary.medianDayUsd, 2) : "-"}
                   inline
                   valueClassName={
