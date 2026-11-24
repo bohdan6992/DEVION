@@ -108,8 +108,6 @@ export function useScannerFilters(
   const [addDelayMinutes, setAddDelayMinutes] = useState<number>(() => Math.max(0, Math.trunc(options.streamAutomationConfigOverride?.addDelayMinutes ?? 0)));
   const [includeEquityCurve, setIncludeEquityCurve] = useState<boolean>(true);
   const [equityCurveMode, setEquityCurveMode] = useState<"Daily" | "Trade">("Daily");
-  const [topN, setTopN] = useState<number>(1000);
-  const [scopeMode, setScopeMode] = useState<"ALL" | "TOP">("ALL");
   const [offset, setOffset] = useState<number>(0);
   const [qTicker, setQTicker] = useState<string>("");
   const [qSide, setQSide] = useState<"" | "Long" | "Short">("");
@@ -139,10 +137,6 @@ export function useScannerFilters(
   });
   const [showAdvanced, setShowAdvanced] = useState<boolean>(false);
   const [ratingMode, setRatingMode] = useState<PaperArbRatingMode>("SESSION");
-  const [topMode, setTopMode] = useState<boolean>(false);
-  const [topSigmaOn, setTopSigmaOn] = useState<boolean>(true);
-  const [topBenchOn, setTopBenchOn] = useState<boolean>(false);
-  const [topTimeOn, setTopTimeOn] = useState<boolean>(false);
   const [ratingType, setRatingType] = useState<PaperArbRatingType>("any");
   const [ratingRules, setRatingRules] = useState<PaperArbRatingRule[]>([
     { band: "BLUE", minRate: 0, minTotal: 0 },
@@ -398,8 +392,6 @@ export function useScannerFilters(
     addDelayMinutes, setAddDelayMinutes,
     includeEquityCurve, setIncludeEquityCurve,
     equityCurveMode, setEquityCurveMode,
-    topN, setTopN,
-    scopeMode, setScopeMode,
     offset, setOffset,
     qTicker, setQTicker,
     qSide, setQSide,
@@ -423,10 +415,6 @@ export function useScannerFilters(
     analyticsSort, setAnalyticsSort,
     showAdvanced, setShowAdvanced,
     ratingMode, setRatingMode,
-    topMode, setTopMode,
-    topSigmaOn, setTopSigmaOn,
-    topBenchOn, setTopBenchOn,
-    topTimeOn, setTopTimeOn,
     ratingType, setRatingType,
     ratingRules, setRatingRules,
     ratingEnabledBands, setRatingEnabledBands,

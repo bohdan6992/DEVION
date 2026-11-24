@@ -642,7 +642,7 @@ export default function ArbitrageScout() {
           canRun={!metaBusy}
           run={() => { setSelected(null); loadMeta(true); }}
           busy={busy}
-          variantString="Reload the published rolling_perf file and the gamma/delta levels from the bridge"
+          variantString="Reload the published arbitrage_rolling_perf file and the gamma/delta levels from the bridge"
         />
 
         <TickerListPanels lists={lists} />
@@ -798,7 +798,7 @@ export default function ArbitrageScout() {
                   options={MODES.map((m) => ({
                     key: m,
                     label: SCOUT_MODES[m].label === "δ" ? "Δ" : SCOUT_MODES[m].label,
-                    title: (m === "gamma" || m === "delta") && !levelsOk ? "gamma/delta are not published in the current best_params file" : SCOUT_MODES[m].hint,
+                    title: (m === "gamma" || m === "delta") && !levelsOk ? "gamma/delta are not published in the current arbitrage_ratings.csv" : SCOUT_MODES[m].hint,
                     locked: (m === "gamma" || m === "delta") && !levelsOk,
                   }))}
                   mode={ui.mode}
@@ -978,7 +978,7 @@ export default function ArbitrageScout() {
         {meta && behind !== null && behind >= 5 && (
           <GlassCard hoverable={false} className="border-amber-300/25 bg-amber-300/[0.04] px-4 py-3">
             <div className="font-mono text-[11px] text-amber-200/90">
-              The published file ends {meta.mostRecentSession} — {behind} days ago. Nothing after that date is in these numbers: re-run ArbitRage.ipynb and publish arbitrage/rolling_perf.json.gz again{meta.generatedAt ? ` (file generated ${meta.generatedAt.slice(0, 16).replace("T", " ")}Z)` : ""}.
+              The published file ends {meta.mostRecentSession} — {behind} days ago. Nothing after that date is in these numbers: re-run ArbitRage.ipynb and publish arbitrage/arbitrage_rolling_perf.json.gz again{meta.generatedAt ? ` (file generated ${meta.generatedAt.slice(0, 16).replace("T", " ")}Z)` : ""}.
             </div>
           </GlassCard>
         )}

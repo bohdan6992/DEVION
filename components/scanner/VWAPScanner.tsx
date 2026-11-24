@@ -46,7 +46,7 @@ import { EPISODES_SEARCH_CACHE_MAX, EPISODES_SEARCH_CACHE_TTL_MS, apiGet, apiPos
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
-import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
+import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerSigBinSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, SCOPE_BIN_MODE_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS } from "../../lib/scanner/scopeParameters";
@@ -258,10 +258,6 @@ export default function OPGReversalScanner({
     setIncludeEquityCurve,
     equityCurveMode,
     setEquityCurveMode,
-    topN,
-    setTopN,
-    scopeMode,
-    setScopeMode,
     offset,
     setOffset,
     qTicker,
@@ -308,14 +304,6 @@ export default function OPGReversalScanner({
     setShowAdvanced,
     ratingMode,
     setRatingMode,
-    topMode,
-    setTopMode,
-    topSigmaOn,
-    setTopSigmaOn,
-    topBenchOn,
-    setTopBenchOn,
-    topTimeOn,
-    setTopTimeOn,
     ratingType,
     setRatingType,
     ratingRules,
@@ -1229,8 +1217,7 @@ export default function OPGReversalScanner({
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
-      `scope=${scopeMode}`,
-      `limit=${scopeMode === "ALL" ? 1000 : topN}`,
+      `limit=1000`,
       `offset=${offset}`,
       `closeMode=${closeMode}`,
       `minHoldCandles=${minHoldCandles}`,
@@ -1238,15 +1225,15 @@ export default function OPGReversalScanner({
       `pnlMode=${pnlMode}`,
       `maxAdds=${maxAdds}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
+    const s = `${metric}|${startAbs}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|1000|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const forceEpisodesSearch = useMemo(() => {
     const has = (v: string) => String(v ?? "").trim().length > 0;
@@ -1660,8 +1647,6 @@ export default function OPGReversalScanner({
             ...normalizedModes,
           });
         }
-        if (typeof s.topN === "number") setTopN(s.topN);
-        if (s.scopeMode === "ALL" || s.scopeMode === "TOP") setScopeMode(s.scopeMode);
         if (typeof s.offset === "number") setOffset(s.offset);
 
         if (typeof s.qTicker === "string") setQTicker(s.qTicker);
@@ -1675,10 +1660,6 @@ export default function OPGReversalScanner({
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
         if (s.ratingMode === "SESSION" || s.ratingMode === "BIN" || s.ratingMode === "BINS") setRatingMode(s.ratingMode);
-        if (typeof s.topMode === "boolean") setTopMode(s.topMode);
-        if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -1874,8 +1855,6 @@ export default function OPGReversalScanner({
       includeEquityCurve,
       equityCurveMode,
       sharedRangeFilterModes,
-      topN,
-      scopeMode,
       offset,
       qTicker,
       qSide,
@@ -1886,7 +1865,6 @@ export default function OPGReversalScanner({
       episodesUseSearch,
       showAdvanced,
       ratingMode,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
       ratingType,
       ratingRules,
       ratingEnabledBands,
@@ -2042,8 +2020,7 @@ export default function OPGReversalScanner({
       // OpenDoor sizeValue also goes to the server and is part of its cache variant key.
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
-      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
+      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, episodesUseSearch, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
@@ -2479,7 +2456,6 @@ export default function OPGReversalScanner({
     ratingType,
     streamRatingRule,
     listMode,
-    scopeMode,
     ignoreTickersText,
     tickersText,
     benchTickersText,
@@ -4338,27 +4314,10 @@ export default function OPGReversalScanner({
         const effTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.last?.metricAbs ?? r.start?.metricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bid = optNumOrNull(r.last?.benchBidPct ?? r.start?.benchBidPct);
-          const ask = optNumOrNull(r.last?.benchAskPct ?? r.start?.benchAskPct);
-          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4417,25 +4376,10 @@ export default function OPGReversalScanner({
         const effTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.peakMetricAbs ?? r.startMetricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bp = optNumOrNull(r.peakBenchLstPrcLstClsPct);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredRangeFilterBundle, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded]);
   const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   // The SNAPSHOT table predates the shared row shape and reads OPGReversal's own field names, so
@@ -5519,7 +5463,7 @@ export default function OPGReversalScanner({
   }, [session, ratingRules]);
   const minRateLabel = selectedRule?.minRate ?? 0;
   const minTotalLabel = selectedRule?.minTotal ?? 0;
-  const limitLabel = scopeMode === "ALL" ? 1000 : topN;
+  const limitLabel = 1000;
   const ignCount = ignoreSet.size;
   const appCount = applySet.size;
   const pinCount = pinSet.size;
@@ -6809,8 +6753,6 @@ export default function OPGReversalScanner({
                     closeMode,
                     priceMode,
                     pnlMode,
-                    scopeMode,
-                    topN,
                     offset,
                     startAbs,
                     startAbsMax,

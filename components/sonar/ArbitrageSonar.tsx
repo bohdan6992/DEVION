@@ -92,6 +92,7 @@ import {
 } from "@/lib/signals/signal";
 import { getLiveStrategy } from "@/lib/strategies/registry";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { fetchSharedLiveSnapshot } from "@/lib/sonar/liveSnapshotClient";
 import {
   fetchArbitrageSonarSnapshot,
   pushArbitrageSonarLiveParams,
@@ -105,13 +106,9 @@ const SONAR_NAV = getLiveStrategy("arbitrage")!.nav;
 export { normalizeSignal };
 export type { ArbitrageSignal };
 
-type Mode = "top" | "all";
+type Mode = "all";
 type RatingMode = "SESSION" | "BIN" | "BINS";
 type TriMode = "off" | "include" | "exclude";
-type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
-type TopWindowTime = { band: string; rate: number; total: number } | null;
-type TopWindowEntry = { sigma: TopWindow; bench: TopWindow; time: TopWindowTime };
-type TopWindows = Partial<Record<string, Partial<Record<"pos" | "neg", TopWindowEntry>>>>;
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
@@ -661,71 +658,6 @@ function getSessionBinRating(
   const total = toNum(entry.t ?? entry.total ?? entry.Total);
   if (rate == null || total == null) return null;
   return { rate, total };
-}
-
-function getTopWindows(signal: ArbitrageSignal, cls: ArbClass): TopWindows[string] | null {
-  const root = safeRecord(getBestParams(signal));
-  const tw = safeRecord(root?.top_windows ?? root?.TopWindows);
-  return safeRecord(tw?.[sonarClassToBinClassKey(cls)]) ?? null;
-}
-
-function getSignalBenchPct(signal: ArbitrageSignal): number | null {
-  const bid = toNum(signal?.bidBench);
-  const ask = toNum(signal?.askBench);
-  if (bid != null && ask != null) return (bid + ask) / 2;
-  return bid ?? ask ?? null;
-}
-
-function currentMarketTimeBand(bandMinutes: number): string | null {
-  try {
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(now);
-    const h = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
-    const min = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
-    if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
-    const m = Math.floor(min / bandMinutes) * bandMinutes;
-    const totalEnd = h * 60 + m + bandMinutes;
-    const eh = Math.floor(totalEnd / 60) % 24;
-    const em = totalEnd % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
-  } catch {
-    return null;
-  }
-}
-
-function passesTopWindowFilter(
-  signal: ArbitrageSignal,
-  cls: ArbClass,
-  topSigmaOn: boolean,
-  topBenchOn: boolean,
-  topTimeOn: boolean
-): boolean {
-  const signKey = sonarBinSignKey(signal);
-  if (!signKey) return false;
-  const tw = getTopWindows(signal, cls);
-  const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
-  if (!entry) return false;
-
-  if (topSigmaOn && entry.sigma) {
-    const sa = getSignalSigmaAbs(signal);
-    if (sa == null) return false;
-    if (sa < entry.sigma.lo || sa > entry.sigma.hi) return false;
-  }
-  if (topBenchOn && entry.bench) {
-    const bp = getSignalBenchPct(signal);
-    if (bp == null) return false;
-    if (bp < entry.bench.lo || bp > entry.bench.hi) return false;
-  }
-  if (topTimeOn && entry.time) {
-    const band = currentMarketTimeBand(30);
-    if (!band || band !== entry.time.band) return false;
-  }
-  return true;
 }
 
 /* =========================
@@ -1491,10 +1423,6 @@ export type SonarExactFilterSnapshot = {
   minTotal: number | string;
   tickersFilterNorm: string;
   listMode: ListMode;
-  topMode: boolean;
-  topSigmaOn: boolean;
-  topBenchOn: boolean;
-  topTimeOn: boolean;
   ignoreSet: Set<string>;
   applySet: Set<string>;
   pinMap: Record<string, string>;
@@ -2147,10 +2075,6 @@ export default function ArbitrageSonar() {
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
   const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
-  const [topMode, setTopMode] = useState(false);
-  const [topSigmaOn, setTopSigmaOn] = useState(true);
-  const [topBenchOn, setTopBenchOn] = useState(false);
-  const [topTimeOn, setTopTimeOn] = useState(false);
   // IGNORE RATINGS — the operator's own instruction (2026-09-27): the ALL/TOP + SESSION/BIN/BINS
   // toggle row is always SESSION+ALL now, no UI can flip it away; in its place, a single RATE/
   // UNIVERSE button, styled and named 1-to-1 off ReversalSonar's own reversalIgnoreRatings.
@@ -2735,18 +2659,15 @@ export default function ArbitrageSonar() {
         if (typeof s?.zapGoldAbs === "number") setZapGoldAbs(s.zapGoldAbs);
 
         // query params
-        // ratingMode/topMode restore removed (2026-09-27, the operator's own instruction): the
-        // SESSION/BIN/BINS + ALL/TOP toggle row is gone, always SESSION+ALL now, so a stale non-
-        // default value from a session saved before this change must not silently come back with no
-        // visible control left to see or undo it.
+        // ratingMode restore removed (2026-09-27, the operator's own instruction): the
+        // SESSION/BIN/BINS row is gone, always SESSION now, so a stale non-default value from a
+        // session saved before that change must not silently come back with no visible control
+        // left to see or undo it. TOP's own restore went with TOP itself on 2026-11-23.
         if (typeof s?.arbitrageIgnoreRatings === "boolean") setArbitrageIgnoreRatings(s.arbitrageIgnoreRatings);
         if (s?.sonarPriceMode === "LastPrint" || s?.sonarPriceMode === "BidAsk") setSonarPriceMode(s.sonarPriceMode);
         if (typeof s?.minRate === "number") setMinRate(s.minRate);
         if (typeof s?.minTotal === "number") setMinTotal(s.minTotal);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
-        if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
         // Layouts saved before the rename stored the inverted `filtersCollapsed`.
@@ -2933,7 +2854,7 @@ export default function ArbitrageSonar() {
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
-          topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings, sonarPriceMode,
+          arbitrageIgnoreRatings, sonarPriceMode,
 
           // toggles
           excludeDividend, excludeNews, excludePTP, excludeSSR, excludeReport, excludeETF, excludeCrap,
@@ -3494,10 +3415,6 @@ export default function ArbitrageSonar() {
       zapSilverAbs,
       zapGoldAbs,
 
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
 
     };
   }, [
@@ -3512,7 +3429,6 @@ export default function ArbitrageSonar() {
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     zapMode, zapShowAbs, zapShowAbsNeg, zapSilverAbs, zapGoldAbs,
-    topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
 
@@ -3708,12 +3624,9 @@ export default function ArbitrageSonar() {
       "PreMhVol","PreMhVolNF",
       "SpreadBid%",
     ].join(",");
-    fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        const item = Array.isArray(data?.items) ? data.items[0] : null;
-        setLiveSnap(item?.Fields ?? item?.fields ?? null);
+    fetchSharedLiveSnapshot(tk, LIVE_FIELDS)
+      .then((snapshot) => {
+        if (!cancelled) setLiveSnap(snapshot);
       })
       .catch(() => { if (!cancelled) setLiveSnap(null); });
     return () => { cancelled = true; };
@@ -4191,13 +4104,12 @@ export default function ArbitrageSonar() {
           modeSlot={
             <>
 
-              {/* ALL/TOP + σ/MKT/TIME sub-pills, and SESSION/BIN/BINS, all removed (2026-09-27, the
-                  operator's own instruction: "Ми завжди в режимі session і в режимі All") - ratingMode/
-                  topMode stay at their defaults (SESSION/false) forever now, nothing in the UI can flip
-                  them, so the σ/MKT/TIME sub-pills (only ever shown while topMode was true) are
-                  unreachable too. RATE/UNIVERSE takes their place - drops the ratings/eligibility gate
-                  entirely when on, styled and named 1-to-1 off ReversalSonar's own
-                  reversalIgnoreRatings button. */}
+              {/* SESSION/BIN/BINS went on 2026-09-27 ("Ми завжди в режимі session і в режимі All")
+                  and ratingMode stays at SESSION, which nothing in the UI can flip. The ALL/TOP pair
+                  and its σ/MKT/TIME sub-pills went the same day and the top_windows gate they drove
+                  was deleted on 2026-11-23, so `mode` is simply always "all". RATE/UNIVERSE takes
+                  their place - drops the ratings/eligibility gate entirely when on, styled and named
+                  1-to-1 off ReversalSonar's own reversalIgnoreRatings button. */}
               <button
                 type="button"
                 onClick={() => setArbitrageIgnoreRatings((v) => !v)}
@@ -5264,7 +5176,6 @@ export default function ArbitrageSonar() {
                         ["ign/apply/pin list", sonarFunnel.rejectedByList],
                         ["ρ/β/σ/bounds range", sonarFunnel.rejectedByRange],
                         ["rating floor", sonarFunnel.rejectedByRating],
-                        ["top window", sonarFunnel.rejectedByTopWindow],
                         ["exclude flags", sonarFunnel.rejectedByExclude],
                         ["geography", sonarFunnel.rejectedByGeo],
                         ["report mode", sonarFunnel.rejectedByReport],

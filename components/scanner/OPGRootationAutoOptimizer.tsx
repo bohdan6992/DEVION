@@ -419,8 +419,8 @@ export default function OPGRootationAutoOptimizer(props: OPGRootationAutoOptimiz
 
   const card = (
       <div className={inline
-        ? "scanner-glass-card relative w-full rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl"
-        : "scanner-glass-card relative w-full max-w-[1480px] rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/95 shadow-[0_20px_80px_rgba(0,0,0,0.55)]"}>
+        ? "scanner-glass-card relative w-full rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl backdrop-blur-xl"
+        : "scanner-glass-card relative w-full max-w-[1480px] rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/95 shadow-[0_20px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl"}>
         {/* ---- title ---- */}
         <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3">
           <div className="flex items-baseline gap-3">

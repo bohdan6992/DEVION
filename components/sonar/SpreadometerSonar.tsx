@@ -7,6 +7,7 @@ import clsx from "clsx";
 
 
 import { subscribeSharedPoll, forceSharedPollNow } from "@/lib/caesar/sharedPoll";
+import { fetchSharedLiveSnapshot } from "@/lib/sonar/liveSnapshotClient";
 import {
   type LimiterSonarRow,
   type LimiterUniverseRow,
@@ -133,13 +134,9 @@ const LIMITER_UNIT_LOCK_NOTE =
 export { normalizeSignal };
 export type { ArbitrageSignal };
 
-type Mode = "top" | "all";
+type Mode = "all";
 type RatingMode = "SESSION" | "BIN" | "BINS";
 type TriMode = "off" | "include" | "exclude";
-type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
-type TopWindowTime = { band: string; rate: number; total: number } | null;
-type TopWindowEntry = { sigma: TopWindow; bench: TopWindow; time: TopWindowTime };
-type TopWindows = Partial<Record<string, Partial<Record<"pos" | "neg", TopWindowEntry>>>>;
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
@@ -639,71 +636,6 @@ function getSessionBinRating(
   const total = toNum(entry.t ?? entry.total ?? entry.Total);
   if (rate == null || total == null) return null;
   return { rate, total };
-}
-
-function getTopWindows(signal: ArbitrageSignal, cls: ArbClass): TopWindows[string] | null {
-  const root = safeRecord(getBestParams(signal));
-  const tw = safeRecord(root?.top_windows ?? root?.TopWindows);
-  return safeRecord(tw?.[sonarClassToBinClassKey(cls)]) ?? null;
-}
-
-function getSignalBenchPct(signal: ArbitrageSignal): number | null {
-  const bid = toNum(signal?.bidBench);
-  const ask = toNum(signal?.askBench);
-  if (bid != null && ask != null) return (bid + ask) / 2;
-  return bid ?? ask ?? null;
-}
-
-function currentMarketTimeBand(bandMinutes: number): string | null {
-  try {
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(now);
-    const h = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
-    const min = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
-    if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
-    const m = Math.floor(min / bandMinutes) * bandMinutes;
-    const totalEnd = h * 60 + m + bandMinutes;
-    const eh = Math.floor(totalEnd / 60) % 24;
-    const em = totalEnd % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
-  } catch {
-    return null;
-  }
-}
-
-function passesTopWindowFilter(
-  signal: ArbitrageSignal,
-  cls: ArbClass,
-  topSigmaOn: boolean,
-  topBenchOn: boolean,
-  topTimeOn: boolean
-): boolean {
-  const signKey = sonarBinSignKey(signal);
-  if (!signKey) return false;
-  const tw = getTopWindows(signal, cls);
-  const entry = safeRecord(tw?.[signKey]) as Partial<TopWindowEntry> | null;
-  if (!entry) return false;
-
-  if (topSigmaOn && entry.sigma) {
-    const sa = getSignalSigmaAbs(signal);
-    if (sa == null) return false;
-    if (sa < entry.sigma.lo || sa > entry.sigma.hi) return false;
-  }
-  if (topBenchOn && entry.bench) {
-    const bp = getSignalBenchPct(signal);
-    if (bp == null) return false;
-    if (bp < entry.bench.lo || bp > entry.bench.hi) return false;
-  }
-  if (topTimeOn && entry.time) {
-    const band = currentMarketTimeBand(30);
-    if (!band || band !== entry.time.band) return false;
-  }
-  return true;
 }
 
 /* =========================
@@ -1388,10 +1320,6 @@ export type SonarExactFilterSnapshot = {
   minTotal: number | string;
   tickersFilterNorm: string;
   listMode: ListMode;
-  topMode: boolean;
-  topSigmaOn: boolean;
-  topBenchOn: boolean;
-  topTimeOn: boolean;
   ignoreSet: Set<string>;
   applySet: Set<string>;
   pinMap: Record<string, string>;
@@ -2081,10 +2009,6 @@ export default function SpreadometerSonar() {
   const [minRate, setMinRate] = useState<number>(0.3);
   const [minTotal, setMinTotal] = useState<number>(1);
   const [ratingMode, setRatingMode] = useState<RatingMode>("SESSION");
-  const [topMode, setTopMode] = useState(false);
-  const [topSigmaOn, setTopSigmaOn] = useState(true);
-  const [topBenchOn, setTopBenchOn] = useState(false);
-  const [topTimeOn, setTopTimeOn] = useState(false);
 
   type NumField = {
     label: string;
@@ -2627,7 +2551,6 @@ export default function SpreadometerSonar() {
         // core
         if (typeof s?.cls === "string") setCls(s.cls);
         if (typeof s?.type === "string") setType(s.type);
-        if (typeof s?.mode === "string") setMode(s.mode);
         if (typeof s?.listMode === "string") setListMode(s.listMode);
         if (typeof s?.bpCls === "string") setBpCls(s.bpCls);
 
@@ -2647,10 +2570,6 @@ export default function SpreadometerSonar() {
         if (typeof s?.limiterMinTotal === "number") setLimiterMinTotal(s.limiterMinTotal);
         if (s?.lstPrcLstClsUnit === "pct" || s?.lstPrcLstClsUnit === "sigma") setLstPrcLstClsUnit(s.lstPrcLstClsUnit);
         if (typeof s?.tickersFilter === "string") setTickersFilter(s.tickersFilter);
-        if (typeof s?.topMode === "boolean") setTopMode(s.topMode);
-        if (typeof s?.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s?.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s?.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (typeof s?.accountNonEmptyFirst === "boolean") setAccountNonEmptyFirst(s.accountNonEmptyFirst);
         if (typeof s?.showSharedMinMax === "boolean") setShowSharedMinMax(s.showSharedMinMax);
         // Layouts saved before the rename stored the inverted `filtersCollapsed`.
@@ -2830,7 +2749,6 @@ export default function SpreadometerSonar() {
 
           // query params
           ratingMode, minRate, minTotal, tickersFilter, accountNonEmptyFirst, showSharedMinMax,
-          topMode, topSigmaOn, topBenchOn, topTimeOn,
 
           // UNIVERSE pill — never persisted before 2026-10-27 (operator-reported: lost on every
           // reload). Distinct from the generic minRate/minTotal above, which belong to a different
@@ -3443,12 +3361,9 @@ export default function SpreadometerSonar() {
       "PreMhVol","PreMhVolNF",
       "SpreadBid%",
     ].join(",");
-    fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        const item = Array.isArray(data?.items) ? data.items[0] : null;
-        setLiveSnap(item?.Fields ?? item?.fields ?? null);
+    fetchSharedLiveSnapshot(tk, LIVE_FIELDS)
+      .then((snapshot) => {
+        if (!cancelled) setLiveSnap(snapshot);
       })
       .catch(() => { if (!cancelled) setLiveSnap(null); });
     return () => { cancelled = true; };
@@ -3496,7 +3411,7 @@ export default function SpreadometerSonar() {
         minRate: limiterMinRate,
         minTotal: limiterMinTotal,
         tickersFilterNorm: "",
-        listMode, topMode: false, topSigmaOn: false, topBenchOn: false, topTimeOn: false,
+        listMode,
         ignoreSet, applySet, pinMap, bounds,
         excludeDividend, excludeNews, excludePTP, excludeSSR,
         excludeReport, excludeETF, excludeCrap, excludeItb, excludeHard,

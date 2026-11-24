@@ -73,6 +73,9 @@ async function tick<T>(key: string, fetcher: Fetcher<T>) {
   } finally {
     ch.inFlight = false;
     for (const listener of ch.listeners) listener(ch.value, ch.error);
+    if (ch.listeners.size === 0 && ch.timer == null && channels.get(key) === ch) {
+      channels.delete(key);
+    }
   }
 }
 
@@ -112,6 +115,9 @@ export function subscribeSharedPoll<T>(
       window.clearInterval(ch.timer);
       ch.timer = null;
     }
+    if (ch.listeners.size === 0 && !ch.inFlight && ch.timer == null && channels.get(key) === ch) {
+      channels.delete(key);
+    }
   };
 }
 
@@ -125,5 +131,6 @@ export function subscribeSharedPoll<T>(
  * callee agree on by name, polling or not.
  */
 export function forceSharedPollNow<T>(key: string, fetcher: Fetcher<T>): void {
+  if (!channels.has(key)) return;
   void tick(key, fetcher);
 }

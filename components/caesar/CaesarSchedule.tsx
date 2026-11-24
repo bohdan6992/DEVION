@@ -86,7 +86,7 @@ function withAlpha(hex: string, alpha: number): string {
  */
 const PANEL = CAESAR_PANEL_SURFACE;
 const GRAPH_SURFACE =
-  "scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80";
+  "scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl";
 
 const HOUR_TICKS = Array.from({ length: 24 }, (_, i) => i * 60);
 const HALF_HOUR_TICKS = Array.from({ length: 23 }, (_, i) => i * 60 + 30);

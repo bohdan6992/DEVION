@@ -49,7 +49,7 @@ import { useEffectiveStreamRules } from "../../lib/scanner/useEffectiveStreamRul
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
-import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
+import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesDeltaZapGate, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerSigBinSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, buildNumericOptimizerParameter, getOptimizerFallbackValue, optimizerKeyToScopeResearchParameterKey, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import type { OptimizerValueEntry } from "../../lib/scanner/scopeOptimizer";
@@ -302,10 +302,6 @@ export default function ArbitrageScanner({
     setIncludeEquityCurve,
     equityCurveMode,
     setEquityCurveMode,
-    topN,
-    setTopN,
-    scopeMode,
-    setScopeMode,
     offset,
     setOffset,
     qTicker,
@@ -352,14 +348,6 @@ export default function ArbitrageScanner({
     setShowAdvanced,
     ratingMode,
     setRatingMode,
-    topMode,
-    setTopMode,
-    topSigmaOn,
-    setTopSigmaOn,
-    topBenchOn,
-    setTopBenchOn,
-    topTimeOn,
-    setTopTimeOn,
     ratingType,
     setRatingType,
     ratingRules,
@@ -1227,8 +1215,7 @@ export default function ArbitrageScanner({
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
-      `scope=${scopeMode}`,
-      `limit=${scopeMode === "ALL" ? 1000 : topN}`,
+      `limit=1000`,
       `offset=${offset}`,
       `closeMode=${closeMode}`,
       `minHoldCandles=${minHoldCandles}`,
@@ -1236,15 +1223,15 @@ export default function ArbitrageScanner({
       `pnlMode=${pnlMode}`,
       `maxAdds=${maxAdds}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${startAbs}|${startAbsNeg}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
+    const s = `${metric}|${startAbs}|${startAbsNeg}|${zapMode === "delta" ? 1 : 0}|${startAbsMax}|${endAbs}|${session}|1000|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
+  }, [metric, startAbs, startAbsNeg, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles, priceMode, pnlMode, maxAdds, zapMode]);
 
   // ========= Preflight validation
   const validationErrors = useMemo(() => {
@@ -1568,8 +1555,6 @@ export default function ArbitrageScanner({
             ...normalizedModes,
           });
         }
-        if (typeof s.topN === "number") setTopN(s.topN);
-        if (s.scopeMode === "ALL" || s.scopeMode === "TOP") setScopeMode(s.scopeMode);
         if (typeof s.offset === "number") setOffset(s.offset);
 
         if (typeof s.qTicker === "string") setQTicker(s.qTicker);
@@ -1581,10 +1566,10 @@ export default function ArbitrageScanner({
         if (typeof s.showPin === "boolean") setShowPin(s.showPin);
         if (typeof s.showAdvanced === "boolean") setShowAdvanced(s.showAdvanced);
 
-        // ratingMode/topMode restore removed (2026-09-27, the operator's own instruction): the
-        // SESSION/BIN/BINS + ALL/TOP toggle row is gone, always SESSION+ALL now, so a stale non-
-        // default value from a session saved before this change must not silently come back with no
-        // visible control left to see or undo it.
+        // ratingMode restore removed (2026-09-27, the operator's own instruction): the
+        // SESSION/BIN/BINS row is gone, always SESSION now, so a stale non-default value from a
+        // session saved before that change must not silently come back with no visible control
+        // left to see or undo it. TOP's own restore went with TOP itself on 2026-11-23.
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -1783,8 +1768,6 @@ export default function ArbitrageScanner({
       includeEquityCurve,
       equityCurveMode,
       sharedRangeFilterModes,
-      topN,
-      scopeMode,
       offset,
       qTicker,
       qSide,
@@ -1794,7 +1777,6 @@ export default function ArbitrageScanner({
       showPin,
       showAdvanced,
       ratingMode,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
       ratingType,
       ratingRules,
       ratingEnabledBands,
@@ -1950,8 +1932,7 @@ export default function ArbitrageScanner({
       arbRatingsMode, arbFrozen, arbCoreOnly, arbOutcome, arbitrageIgnoreRatings,
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
-      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
+      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, showAdvanced,
       ratingMode, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
@@ -2326,7 +2307,6 @@ export default function ArbitrageScanner({
     ratingType,
     streamRatingRule,
     listMode,
-    scopeMode,
     ignoreTickersText,
     tickersText,
     benchTickersText,
@@ -2394,14 +2374,13 @@ export default function ArbitrageScanner({
       min: rangeValueOrNull(key, minRaw),
       max: rangeValueOrNull(key, maxRaw),
     });
-    const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
 
       const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
 
       return {
         cls: streamSignalClass,
         type: ratingType ?? "any",
-        mode: scopeModeForSnapshot,
+        mode: "all",
         ratingMode,
         minRate: streamRatingRule.minRate,
         minTotal: streamRatingRule.minTotal,
@@ -2488,14 +2467,9 @@ export default function ArbitrageScanner({
       zapShowAbsNeg: (() => { const n = optNumOrNull(startAbsNeg); return n != null && n > 0 ? n : null; })(),
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
     };
   }, [
       benchTickersText,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
       selCountries, countryEnabled,
       selExchanges, exchangeEnabled,
       selSectors, sectorEnabled,
@@ -3334,7 +3308,7 @@ export default function ArbitrageScanner({
         const req = buildPostRequest(from, to);
         req.includeEquityCurve = includeEquityCurve;
         req.equityCurveMode = equityCurveMode;
-        req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
+        req.topN = 1000;
         const [analyticsResp, rows] = await Promise.all([
           apiPost<PaperArbAnalyticsResponse>(`${STRATEGY.api.base}/analytics`, req),
           fetchEpisodesSearchRows(req),
@@ -4280,27 +4254,10 @@ export default function ArbitrageScanner({
         const effTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.last?.metricAbs ?? r.start?.metricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bid = optNumOrNull(r.last?.benchBidPct ?? r.start?.benchBidPct);
-          const ask = optNumOrNull(r.last?.benchAskPct ?? r.start?.benchAskPct);
-          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, arbitrageIgnoreRatings]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4365,25 +4322,10 @@ export default function ArbitrageScanner({
         const effTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.peakMetricAbs ?? r.startMetricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bp = optNumOrNull(r.peakBenchLstPrcLstClsPct);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn, arbitrageIgnoreRatings]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, startAbsNeg, ratingMode, ratingType, metric, ratingRules, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, requireHasReport, excludeHasReport, excludeCorr, sectorCorr.excluded, arbitrageIgnoreRatings]);
   const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   useEffect(() => {
@@ -5383,8 +5325,6 @@ export default function ArbitrageScanner({
       closeMode,
       priceMode,
       pnlMode,
-      scopeMode,
-      topN,
       offset,
       startAbs,
       startAbsMax,
@@ -5399,7 +5339,7 @@ export default function ArbitrageScanner({
       zapMode,
     }),
     [
-      session, ruleBand, metric, closeMode, priceMode, pnlMode, scopeMode, topN, offset,
+      session, ruleBand, metric, closeMode, priceMode, pnlMode, offset,
       startAbs, startAbsMax, startAbsNeg, endAbs, minHoldCandles, startCutoffTime, preStartTime,
       dilutionMode, dilutionStep, maxAdds, zapMode,
     ]
@@ -5454,7 +5394,7 @@ export default function ArbitrageScanner({
   }, [session, ratingRules]);
   const minRateLabel = selectedRule?.minRate ?? 0;
   const minTotalLabel = selectedRule?.minTotal ?? 0;
-  const limitLabel = scopeMode === "ALL" ? 1000 : topN;
+  const limitLabel = 1000;
   const ignCount = ignoreSet.size;
   const appCount = applySet.size;
   const pinCount = pinSet.size;
@@ -5880,11 +5820,13 @@ export default function ArbitrageScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* ALL/TOP + SESSION/BIN/BINS toggle row removed (2026-09-27, the operator's own
-              instruction: "Ми завжди в режимі session і в режимі All") - ratingMode/topMode stay at
-              their useScannerFilters defaults (SESSION/ALL) forever now, nothing in the UI can flip
-              them. RATE/UNIVERSE takes its place - drops the ratings/eligibility gate entirely when
-              on, styled and named 1-to-1 off ReversalScanner's own reversalIgnoreRatings button. */}
+          {/* The SESSION/BIN/BINS row went on 2026-09-27 ("Ми завжди в режимі session і в режимі
+              All"); ratingMode stays at its useScannerFilters default (SESSION) and nothing in the UI
+              can flip it. TOP itself - the ALL/TOP toggle, its sigma/MKT/TIME sub-pills and the whole
+              top_windows gate behind them - was deleted outright on 2026-11-23, so the scope is always
+              ALL and the row limit a flat 1000. RATE/UNIVERSE takes this spot - drops the
+              ratings/eligibility gate entirely when on, styled and named 1-to-1 off ReversalScanner's
+              own reversalIgnoreRatings button. */}
           <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} />
           <ScannerRateButton ignoreRatings={arbitrageIgnoreRatings} onToggle={() => setArbitrageIgnoreRatings((v) => !v)} />
 
@@ -6275,32 +6217,6 @@ export default function ArbitrageScanner({
               ))}
           </div>
 
-          <div className="h-7 w-px self-center bg-white/5" />
-
-          <div className="flex h-7 items-center gap-2">
-            {[
-              { key: "ALL", label: "ALL" },
-              { key: "TOP", label: "TOP" },
-            ].map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => {
-                  const next = m.key as "ALL" | "TOP";
-                  setScopeMode(next);
-                  if (next === "ALL") setTopN(1000);
-                }}
-                className={clsx(
-                  TOOLBAR_BUTTON_BASE,
-                  scopeMode === m.key
-                    ? TOOLBAR_BUTTON_ACTIVE
-                    : TOOLBAR_BUTTON_INACTIVE
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
 
           <div className="h-7 w-px self-center bg-white/5" />
 
@@ -7259,8 +7175,6 @@ export default function ArbitrageScanner({
                     closeMode,
                     priceMode,
                     pnlMode,
-                    scopeMode,
-                    topN,
                     offset,
                     startAbs,
                     startAbsMax,
@@ -9010,8 +8924,6 @@ export default function ArbitrageScanner({
                         closeMode,
                         priceMode,
                         pnlMode,
-                        scopeMode,
-                        topN,
                         offset,
                         startAbs,
                         startAbsMax,

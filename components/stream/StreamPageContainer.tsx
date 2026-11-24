@@ -1,14 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { bridgeUrl, fetchWithTimeout } from "../../lib/bridgeBase";
 import { StreamInstanceProvider, useStreamInstance } from "./streamInstance";
 import { registerStreamAutomation } from "./streamAutomationHub";
 
-// Legacy constants are kept for the inert compatibility callbacks below; the active Caesar path
-// uses the one timer in streamAutomationHub.
-const STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS = 10000;
-const STREAM_AUTOMATION_STATE_POLL_MS = 10000;
 import {
   deriveStreamExecutionDescriptor,
   type StreamAutomationConfig,
@@ -408,144 +403,6 @@ function StreamPageContainerInner({
       return next;
     });
   }, []);
-
-  // See fetchWithTimeout's doc comment — an untimed poll on a setInterval that does not wait for
-  // its own previous call stacks new fetches on top of stuck ones until Chrome refuses every
-  // request on the tab with ERR_INSUFFICIENT_RESOURCES (measured live 2026-09-09).
-  const pullStateInFlightRef = useRef(false);
-  const heartbeatInFlightRef = useRef(false);
-
-  const pullRemoteState = useCallback(async () => {
-    return;
-    /* Legacy per-instance polling retained below for reference; Caesar uses streamAutomationHub. */
-    if (pullStateInFlightRef.current) return;
-    pullStateInFlightRef.current = true;
-    try {
-      const response = await fetchWithTimeout(bridgeUrl(`/api/stream/automation/state?strategyId=${encodeURIComponent(strategyId)}`), { cache: "no-store" });
-      const json = await response.json().catch(() => ({}));
-      if (!response.ok || json?.ok === false) return;
-      const state = json?.state ?? {};
-      const remoteAutoEnabled = Boolean(state.autoEnabled);
-      const remoteStrategyModeEnabled = Boolean(state.strategyModeEnabled);
-      const guarded = Date.now() < remoteAutomationGuardUntilRef.current;
-      if (
-        guarded &&
-        (remoteAutoEnabled !== streamAutoEnabled || remoteStrategyModeEnabled !== automationConfig.strategyModeEnabled)
-      ) {
-        return;
-      }
-      setStreamAutoEnabled((prev) => {
-        if (prev === remoteAutoEnabled) return prev;
-        // Visible without needing the stream-gate-debug filter — this is a silent kill-switch
-        // if it fires unexpectedly (e.g. remote/server lost its "enabled" state after a backend
-        // restart, and this pullRemoteState call — triggered by mount or the tab regaining
-        // focus/visibility — just turned local automation off to match).
-        // eslint-disable-next-line no-console
-        console.warn(`[stream-remote-sync] streamAutoEnabled ${prev} -> ${remoteAutoEnabled} (remote state overwrote local)`, {
-          at: new Date().toISOString(),
-          strategyId,
-          source: document.visibilityState === "visible" ? "focus/visibility/mount" : "background",
-        });
-        return remoteAutoEnabled;
-      });
-      setAutomationConfig((prev) => {
-        const next = {
-          ...prev,
-          strategyModeEnabled: remoteStrategyModeEnabled,
-        };
-        if (prev.strategyModeEnabled !== remoteStrategyModeEnabled) {
-          // eslint-disable-next-line no-console
-          console.warn(`[stream-remote-sync] strategyModeEnabled ${prev.strategyModeEnabled} -> ${remoteStrategyModeEnabled} (remote state overwrote local)`, {
-            at: new Date().toISOString(),
-            strategyId,
-          });
-        }
-        return sameStreamAutomationConfig(prev, next) ? prev : next;
-      });
-    } catch {
-      // keep local state if remote sync is unavailable
-    } finally {
-      pullStateInFlightRef.current = false;
-    }
-  }, [automationConfig.strategyModeEnabled, streamAutoEnabled, strategyId]);
-
-  const sendHeartbeat = useCallback(async () => {
-    return;
-    /* Legacy per-instance heartbeat retained below for reference; Caesar uses streamAutomationHub. */
-    if (heartbeatInFlightRef.current) return;
-    heartbeatInFlightRef.current = true;
-    try {
-      await fetchWithTimeout(bridgeUrl("/api/stream/automation/heartbeat"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          clientId: streamPageClientId,
-          source: "stream-page",
-          strategyId,
-        }),
-      });
-    } catch {
-      // heartbeat is best-effort
-    } finally {
-      heartbeatInFlightRef.current = false;
-    }
-  }, [streamPageClientId, strategyId]);
-
-  useEffect(() => {
-    return;
-    let cancelled = false;
-    const syncNow = async () => {
-      await sendHeartbeat();
-      if (!cancelled) {
-        await pullRemoteState();
-      }
-    };
-
-    const onVisibilityOrFocus = () => {
-      if (document.visibilityState === "visible") {
-        void syncNow();
-      }
-    };
-
-    // Caesar mounts Arbitrage and PairFlux at the same moment, so their two copies of this effect
-    // fire `syncNow()` in the same tick by default — a burst of simultaneous requests fighting for
-    // the same handful of HTTP/1.1 connections a persistent SSE feed per strategy already narrows
-    // (see fetchWithTimeout's doc comment). A small deterministic-per-strategy delay spreads that
-    // burst out instead of concentrating it; stable across remounts (hash of strategyId, not
-    // Math.random()) so behaviour stays reproducible between runs.
-    let hash = 0;
-    for (let i = 0; i < strategyId.length; i++) hash = (hash * 31 + strategyId.charCodeAt(i)) | 0;
-    const jitterMs = Math.abs(hash) % 1500;
-
-    const startTimer = window.setTimeout(() => {
-      void syncNow();
-    }, jitterMs);
-    let heartbeatTimer: number | null = null;
-    let stateTimer: number | null = null;
-    const armTimer = window.setTimeout(() => {
-      heartbeatTimer = window.setInterval(() => {
-        void sendHeartbeat();
-      }, STREAM_AUTOMATION_HEARTBEAT_INTERVAL_MS);
-      // The schedule moves without anyone touching this tab. See STREAM_AUTOMATION_STATE_POLL_MS.
-      stateTimer = window.setInterval(() => {
-        if (cancelled) return;
-        void pullRemoteState();
-      }, STREAM_AUTOMATION_STATE_POLL_MS);
-    }, jitterMs);
-
-    window.addEventListener("focus", onVisibilityOrFocus);
-    document.addEventListener("visibilitychange", onVisibilityOrFocus);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(startTimer);
-      window.clearTimeout(armTimer);
-      if (heartbeatTimer != null) window.clearInterval(heartbeatTimer);
-      if (stateTimer != null) window.clearInterval(stateTimer);
-      window.removeEventListener("focus", onVisibilityOrFocus);
-      document.removeEventListener("visibilitychange", onVisibilityOrFocus);
-    };
-  }, [pullRemoteState, sendHeartbeat, strategyId]);
 
   useEffect(() => registerStreamAutomation(strategyId, streamPageClientId, (state) => {
     if (!state) return;

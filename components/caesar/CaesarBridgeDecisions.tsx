@@ -473,7 +473,7 @@ function StrategySection({ strategy, label }: { strategy: "arbitrage" | "pairflu
   return (
     <div
       className={
-        "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80" +
+        "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl" +
         (outOfPlan ? " opacity-40 grayscale" : "")
       }
     >
@@ -557,7 +557,7 @@ function OpenDoorFamilySection() {
                 <div
                   key={strategyId}
                   className={
-                    "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80" +
+                    "scanner-glass-card min-w-0 space-y-2 rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 p-3 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl" +
                     (outOfPlan ? " opacity-40 grayscale" : "")
                   }
                 >
@@ -824,7 +824,7 @@ export function AllSituationsSection({
     // fill exactly what the single wide table used to. Same semi-transparent surface + hover
     // darkening as CaesarPositions' own strategy cards (2026-10-21, the operator's own instruction),
     // not CAESAR_PANEL_SURFACE's own static, more opaque panel look.
-    <div className="scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className="scanner-glass-card overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {/*
         Capped at two chart rows' own height (384 + the 12px gap between them + 384 = 780,
         CaesarCharts' own numbers — 2026-10-08, the operator's own instruction) so a long book

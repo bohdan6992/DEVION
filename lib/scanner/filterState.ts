@@ -227,7 +227,6 @@ export type ScannerFilterState = {
   scannerPresets: PresetDto[];
   scopeBenchText: string;
   scopeFullscreenPanel: ScopePanelKey | null;
-  scopeMode: "ALL" | "TOP";
   scopeParameterGroupExpanded: Record<string, boolean>;
   scopeResearchDrafts: Record<ScopePanelKey, ScopeResearchDraft>;
   scopeResearchFiltersHidden: 
@@ -257,11 +256,6 @@ export type ScannerFilterState = {
   streamAutomationTogglePending: null | "start" | "stop";
   streamWindowCaptureBusy: boolean;
   tickersText: string;
-  topBenchOn: boolean;
-  topMode: boolean;
-  topN: number;
-  topSigmaOn: boolean;
-  topTimeOn: boolean;
   updatedAt: Date | null;
   zapMode: ZapMode;
 };
@@ -465,7 +459,6 @@ export type ScannerFilterSetters = {
   setScannerPresets: React.Dispatch<React.SetStateAction<PresetDto[]>>;
   setScopeBenchText: React.Dispatch<React.SetStateAction<string>>;
   setScopeFullscreenPanel: React.Dispatch<React.SetStateAction<ScopePanelKey | null>>;
-  setScopeMode: React.Dispatch<React.SetStateAction<"ALL" | "TOP">>;
   setScopeParameterGroupExpanded: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setScopeResearchDrafts: React.Dispatch<React.SetStateAction<Record<ScopePanelKey, ScopeResearchDraft>>>;
   setScopeResearchFiltersHidden: React.Dispatch<React.SetStateAction<
@@ -495,11 +488,6 @@ export type ScannerFilterSetters = {
   setStreamAutomationTogglePending: React.Dispatch<React.SetStateAction<null | "start" | "stop">>;
   setStreamWindowCaptureBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setTickersText: React.Dispatch<React.SetStateAction<string>>;
-  setTopBenchOn: React.Dispatch<React.SetStateAction<boolean>>;
-  setTopMode: React.Dispatch<React.SetStateAction<boolean>>;
-  setTopN: React.Dispatch<React.SetStateAction<number>>;
-  setTopSigmaOn: React.Dispatch<React.SetStateAction<boolean>>;
-  setTopTimeOn: React.Dispatch<React.SetStateAction<boolean>>;
   setUpdatedAt: React.Dispatch<React.SetStateAction<Date | null>>;
   setZapMode: React.Dispatch<React.SetStateAction<ZapMode>>;
 };

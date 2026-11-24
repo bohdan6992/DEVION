@@ -50,7 +50,7 @@ import { useEffectiveStreamRules } from "../../lib/scanner/useEffectiveStreamRul
 import { downloadEpisodesCsv } from "../../lib/scanner/csv";
 import { buildRangeValues, clampInt, clampNumber, fmtHms, formatDilutionStepValue, formatScannerSizeValue, intn, minuteIdxToClockLabel, normalizeDilutionStepValue, normalizeMaxAddsValue, normalizeScannerSizeValue, normalizeSide, num, numOrNull, numSpaced, optNumOrNull, parseTickersFromCsv, ratePctFromFraction, ratePctToFraction, sessionTimeChartRange, splitListUpper, stepDilutionStepValue, stepScannerSizeValue, tickerKey, toYmd } from "../../lib/scanner/format";
 import { scannerRealtimePnlUsd, scannerTickerAmountUsd } from "../../lib/scanner/pnl";
-import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerCurrentTimeBand, scannerSigBinSnapshot, scannerTopWindowSnapshot } from "../../lib/scanner/rating";
+import { PAPER_ARB_RATING_BANDS, normalizePaperArbRatingRules, passesScannerBinRatingFilter, ratingBandFromSession, scannerBinFilterEnabled, scannerSigBinSnapshot } from "../../lib/scanner/rating";
 import { buildScopeResearchSelectionFromDraft, computeScopeResearch, getEpisodeDateKey, scopeResearchFormatValue, scopeResearchMetricValue, scopeResearchOptionByValue, scopeResearchParameterValue, scopeResearchSummarize } from "../../lib/scanner/scopeCompute";
 import { buildCategoricalOptimizerParameter, buildFallbackBinRatingOptimizerParameter, buildFallbackOptimizerParameter, buildFallbackScopeOptimizerParameter, getOptimizerFallbackValue, scoreTailDamage, buildMarketTypeOptimizerParameter } from "../../lib/scanner/scopeOptimizer";
 import { DEFAULT_SHARED_RANGE_FILTER_MODES, OPTIMIZER_GROUP_DISPLAY_LABELS, OPTIMIZER_RANK_METRIC_OPTIONS, SCOPE_BIN_MODE_OPTIONS, RANGE_PRESET_OPTIONS, SCOPE_PARAMETER_BY_KEY, SCOPE_PARAMETER_DEFINITIONS, SCOPE_PARAMETER_SELECT_GROUPS, SCOPE_THRESHOLD_MODE_OPTIONS } from "../../lib/scanner/scopeParameters";
@@ -265,10 +265,6 @@ export default function PairFluxScanner({
     setIncludeEquityCurve,
     equityCurveMode,
     setEquityCurveMode,
-    topN,
-    setTopN,
-    scopeMode,
-    setScopeMode,
     offset,
     setOffset,
     qTicker,
@@ -315,14 +311,6 @@ export default function PairFluxScanner({
     setShowAdvanced,
     ratingMode,
     setRatingMode,
-    topMode,
-    setTopMode,
-    topSigmaOn,
-    setTopSigmaOn,
-    topBenchOn,
-    setTopBenchOn,
-    topTimeOn,
-    setTopTimeOn,
     ratingType,
     setRatingType,
     ratingRules,
@@ -1121,8 +1109,7 @@ export default function PairFluxScanner({
       `startAbsMax=${startAbsMax || "off"}`,
       `endAbs=${endAbs}`,
       `session=${session}`,
-      `scope=${scopeMode}`,
-      `limit=${scopeMode === "ALL" ? 1000 : topN}`,
+      `limit=1000`,
       `offset=${offset}`,
       `closeMode=${closeMode}`,
       `minHoldCandles=${minHoldCandles}`,
@@ -1140,17 +1127,17 @@ export default function PairFluxScanner({
       `sizingMode=${sizingMode}`,
       `sizeValue=${sizeValue}`,
     ].join(" | ");
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles,
+  }, [metric, startAbs, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles,
       priceMode, pnlMode, maxAdds, zapMode, dilutionMode, dilutionStep, addDelayMinutes, sizingMode, sizeValue]);
 
   const variantShort = useMemo(() => {
     // small stable hash-ish label without bringing crypto
-    const s = `${metric}|${devUnit}|${startAbs}|${startAbsMax}|${endAbs}|${session}|${scopeMode}|${scopeMode === "ALL" ? 1000 : topN}|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`
+    const s = `${metric}|${devUnit}|${startAbs}|${startAbsMax}|${endAbs}|${session}|1000|${offset}|${closeMode}|${minHoldCandles}|${pnlMode}|${maxAdds}|${priceMode}`
       + `|${dilutionMode}|${dilutionStep}|${addDelayMinutes}|${sizingMode}|${sizeValue}`;
     let h = 0;
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return `v${h.toString(16).slice(0, 8)}`;
-  }, [metric, startAbs, startAbsMax, endAbs, session, scopeMode, topN, offset, closeMode, minHoldCandles,
+  }, [metric, startAbs, startAbsMax, endAbs, session, offset, closeMode, minHoldCandles,
       priceMode, pnlMode, maxAdds, zapMode, dilutionMode, dilutionStep, addDelayMinutes, sizingMode, sizeValue]);
 
   // ========= Preflight validation
@@ -1453,9 +1440,6 @@ export default function PairFluxScanner({
             ...normalizedModes,
           });
         }
-        if (typeof s.topN === "number") setTopN(s.topN);
-        // ALL/TOP is gone from this toolbar: scope is always ALL, so a saved TOP cannot narrow the list silently.
-        setScopeMode("ALL");
         if (typeof s.offset === "number") setOffset(s.offset);
 
         if (typeof s.qTicker === "string") setQTicker(s.qTicker);
@@ -1469,12 +1453,7 @@ export default function PairFluxScanner({
 
         // PairFlux has no BIN/BINS mode. A layout saved while one was selectable restores as SESSION.
         setRatingMode("SESSION");
-        // ALL/TOP is gone from this toolbar: a saved TOP must not come back as a hidden filter.
-        setTopMode(false);
         if (typeof s.ignoreRatings === "boolean") setIgnoreRatings(s.ignoreRatings);
-        if (typeof s.topSigmaOn === "boolean") setTopSigmaOn(s.topSigmaOn);
-        if (typeof s.topBenchOn === "boolean") setTopBenchOn(s.topBenchOn);
-        if (typeof s.topTimeOn === "boolean") setTopTimeOn(s.topTimeOn);
         if (s.ratingType === "any" || s.ratingType === "hard" || s.ratingType === "soft") setRatingType(s.ratingType);
         if (Array.isArray(s.ratingRules)) {
           const rr = s.ratingRules
@@ -1659,8 +1638,6 @@ export default function PairFluxScanner({
       includeEquityCurve,
       equityCurveMode,
       sharedRangeFilterModes,
-      topN,
-      scopeMode,
       offset,
       qTicker,
       qSide,
@@ -1671,7 +1648,6 @@ export default function PairFluxScanner({
       showAdvanced,
       ratingMode,
       ignoreRatings,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
       ratingType,
       ratingRules,
       ratingEnabledBands,
@@ -1825,8 +1801,7 @@ export default function PairFluxScanner({
       // them move the P&L, which is why a reload could return a different result for the same day.
       sizingMode, sizeValue, dilutionMode, dilutionStep, maxAdds, addDelayMinutes,
       optimizerRangeRankMetric, optimizerRangeMinTrades, optimizerBucketCount, optimizerBinMode,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
-      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, topN, scopeMode, offset,
+      includeEquityCurve, equityCurveMode, sharedRangeFilterModes, offset,
       qTicker, qSide, listMode, showIgnore, showApply, showPin, showAdvanced,
       ratingMode, ignoreRatings, ratingType, ratingRules, ratingEnabledBands, ignoreTickersText, tickersText, benchTickersText, sideFilter,
       selExchanges, selCountries, selSectors, countryEnabled, exchangeEnabled, sectorEnabled, scopeBenchText, imbExchsText, minTierBp, maxTierBp,
@@ -2171,14 +2146,13 @@ export default function PairFluxScanner({
       min: rangeValueOrNull(key, minRaw),
       max: rangeValueOrNull(key, maxRaw),
     });
-    const scopeModeForSnapshot = scopeMode === "TOP" ? "top" : "all";
 
       const pinMap = Object.fromEntries(splitListUpper(benchTickersText).map((ticker) => [ticker, "cyan"]));
 
       return {
         cls: streamSignalClass,
         type: ratingType ?? "any",
-        mode: scopeModeForSnapshot,
+        mode: "all",
         ratingMode,
         // Deliberately 0/0, the same way the OpenDoor Sonar neutralises this floor.
         //
@@ -2296,14 +2270,9 @@ export default function PairFluxScanner({
         skipArbitrageZapThreshold: true,
       zapSilverAbs: optNumOrNull(startAbsMax) ?? 0,
       zapGoldAbs: Math.max(0, Number(endAbs) || 0),
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
     };
   }, [
       benchTickersText,
-      topMode, topSigmaOn, topBenchOn, topTimeOn,
       selCountries, countryEnabled,
       selExchanges, exchangeEnabled,
       selSectors, sectorEnabled,
@@ -3167,7 +3136,7 @@ export default function PairFluxScanner({
         const req = buildPostRequest(from, to);
         req.includeEquityCurve = includeEquityCurve;
         req.equityCurveMode = equityCurveMode;
-        req.topN = Math.max(1, Math.min(1000, clampInt(scopeMode === "ALL" ? 1000 : topN, 1000)));
+        req.topN = 1000;
         // No /analytics call, for the same reason the OpenDoor family dropped it: the response is
         // never read. `analytics` is used only as a non-null gate on the ANALYTICS TRADES block,
         // whose rows come from filteredEpisodes. Asking a server endpoint to recompute the same day
@@ -4105,27 +4074,10 @@ export default function PairFluxScanner({
         const effTotal = Math.max(0, Math.trunc(Number(activeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.last?.metricAbs ?? r.start?.metricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bid = optNumOrNull(r.last?.benchBidPct ?? r.start?.benchBidPct);
-          const ask = optNumOrNull(r.last?.benchAskPct ?? r.start?.benchAskPct);
-          const bp = bid != null && ask != null ? (bid + ask) / 2 : (bid ?? ask ?? null);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r as unknown as PaperArbClosedDto)) return false;
       return true;
     });
-  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [activeRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded]);
 
   const filteredEpisodes = useMemo(() => {
     const tq = deferredQTicker.trim().toUpperCase();
@@ -4177,25 +4129,10 @@ export default function PairFluxScanner({
         const effTotal = Math.max(0, Math.trunc(Number(episodeBinRule.minTotal) || 0));
         if (snap.rate < effRate || snap.total < effTotal) return false;
       }
-      if (topMode) {
-        const sigmaAbs = r.peakMetricAbs ?? r.startMetricAbs;
-        const tw = scannerTopWindowSnapshot({ row: r, session, side: r.side, sigmaAbs });
-        if (!tw) return false;
-        if (topSigmaOn && tw.sigma) {
-          if (sigmaAbs == null || !Number.isFinite(sigmaAbs) || sigmaAbs < tw.sigma.lo || sigmaAbs > tw.sigma.hi) return false;
-        } else if (topSigmaOn && !tw.sigma) return false;
-        if (topBenchOn && tw.bench) {
-          const bp = optNumOrNull(r.peakBenchLstPrcLstClsPct);
-          if (bp == null || bp < tw.bench.lo || bp > tw.bench.hi) return false;
-        } else if (topBenchOn && !tw.bench) return false;
-        if (topTimeOn && tw.time) {
-          if (scannerCurrentTimeBand(30) !== tw.time.band) return false;
-        } else if (topTimeOn && !tw.time) return false;
-      }
       if (!passesStaticMetricRangeFilters(r)) return false;
       return true;
     });
-  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded, topMode, topSigmaOn, topBenchOn, topTimeOn]);
+  }, [episodesRows, deferredQTicker, qSide, listMode, ignoreSet, applySet, pinSet, zapMode, startAbs, ratingMode, ratingType, metric, ratingRulesEff, session, arbitrageTickerMetaByTicker, sharedRangeFilterModes, deferredMinCorr, deferredMaxCorr, deferredMinBeta, deferredMaxBeta, deferredMinSigma, deferredMaxSigma, deferredMinAlpha, deferredMaxAlpha, requireHasReport, excludeHasReport, excludeCorr, excludeItb, excludeHard, sectorCorr.excluded]);
   const marketTypeByDayRef = useMarketTypeByDay(episodesRows);
 
   useEffect(() => {
@@ -5161,8 +5098,6 @@ export default function PairFluxScanner({
       closeMode,
       priceMode,
       pnlMode,
-      scopeMode,
-      topN,
       offset,
       startAbs,
       startAbsMax,
@@ -5176,7 +5111,7 @@ export default function PairFluxScanner({
       zapMode,
     }),
     [
-      session, ruleBand, metric, closeMode, priceMode, pnlMode, scopeMode, topN, offset,
+      session, ruleBand, metric, closeMode, priceMode, pnlMode, offset,
       startAbs, startAbsMax, endAbs, minHoldCandles, startCutoffTime, preStartTime,
       dilutionMode, dilutionStep, maxAdds, zapMode,
     ]
@@ -5231,7 +5166,7 @@ export default function PairFluxScanner({
   }, [session, ratingRules]);
   const minRateLabel = selectedRule?.minRate ?? 0;
   const minTotalLabel = selectedRule?.minTotal ?? 0;
-  const limitLabel = scopeMode === "ALL" ? 1000 : topN;
+  const limitLabel = 1000;
   const ignCount = ignoreSet.size;
   const appCount = applySet.size;
   const pinCount = pinSet.size;
@@ -5563,8 +5498,8 @@ export default function PairFluxScanner({
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
-          {/* ALL/TOP + σ/MKT/TIME removed from this toolbar (2026-10-05, the operator's own instruction).
-              topMode stays false, so nothing here can narrow the list to the top windows. RATE/UNIVERSE
+          {/* ALL/TOP + σ/MKT/TIME left this toolbar on 2026-10-05 and the machinery behind them was
+              deleted on 2026-11-23: there is no top_windows gate to narrow to any more. RATE/UNIVERSE
               takes its place, styled and named exactly like the PairFlux Sonar's button. */}
           <ScannerMarketControl on={marketOn} setOn={setMarketOn} value={marketTypes} onChange={setMarketTypes} />
           <ScannerRateButton ignoreRatings={ignoreRatings} onToggle={() => setIgnoreRatings((v) => !v)} />
@@ -6847,8 +6782,6 @@ export default function PairFluxScanner({
                     closeMode,
                     priceMode,
                     pnlMode,
-                    scopeMode,
-                    topN,
                     offset,
                     startAbs,
                     startAbsMax,
@@ -8563,8 +8496,6 @@ export default function PairFluxScanner({
                         closeMode,
                         priceMode,
                         pnlMode,
-                        scopeMode,
-                        topN,
                         offset,
                         startAbs,
                         startAbsMax,

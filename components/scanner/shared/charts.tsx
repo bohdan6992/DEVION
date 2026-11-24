@@ -56,6 +56,30 @@ function roundedPolyline(points: readonly [number, number][], radius: number): s
   return d;
 }
 
+/**
+ * The block's real pixel width. The charts used to draw into a fixed 1100px viewBox and let the SVG
+ * scale (and letterbox) it, so on a wide block the drawing never reached the edges and the 14px axis
+ * text scaled with it. Drawing at the measured width keeps the plot edge to edge and the text 1:1.
+ */
+function useBlockWidth(fallback: number): [React.RefObject<HTMLDivElement>, number] {
+  const ref = React.useRef<HTMLDivElement>(null);
+  const [width, setWidth] = React.useState(fallback);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const apply = () => {
+      const next = Math.round(el.clientWidth);
+      if (next > 0) setWidth((prev) => (prev === next ? prev : next));
+    };
+    apply();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
 export function EquityChartImpl({
   points,
   title,
@@ -67,10 +91,10 @@ export function EquityChartImpl({
   meta?: string;
   fullscreen?: boolean;
 }) {
-  const w = fullscreen ? 2800 : 1100;
+  const [boxRef, w] = useBlockWidth(fullscreen ? 2800 : 1100);
   const h = 360;
-  const padLeft = 18;
-  const padRight = 46;
+  const padLeft = 14;
+  const padRight = 66; // gutter for the price labels: they sit beside the plot, never on it
   const padTop = 34;
   const padBottom = 40;
 
@@ -252,30 +276,35 @@ export function EquityChartImpl({
   const last = chartPoints[chartPoints.length - 1];
   const firstY = toY(first?.equity ?? 0);
   const lastY = toY(last?.equity ?? 0);
+  // The colour follows the SUM (the final equity): green when it is >= 0, red when it is negative.
+  const lossTone = (last?.equity ?? 0) < 0;
+  const tone = lossTone
+    ? { bg: "rgba(244,63,94,0.08)", fillTop: "rgba(244,63,94,0.35)", fillBot: "rgba(244,63,94,0.02)", s0: "rgba(251,113,133,0.95)", s1: "rgba(244,63,94,0.95)", dot: "rgba(244,63,94,1)", text: "fill-rose-300" }
+    : { bg: "rgba(16,185,129,0.08)", fillTop: "rgba(16,185,129,0.35)", fillBot: "rgba(16,185,129,0.02)", s0: "rgba(45,212,191,0.95)", s1: "rgba(110,231,183,0.95)", dot: "rgba(16,185,129,1)", text: "fill-emerald-300" };
   const zeroInRange = minY <= 0 && maxY >= 0;
   const zeroY = zeroInRange ? toY(0) : null;
 
   return (
-    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div ref={boxRef} className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
           <div className="text-[10px] font-mono text-zinc-600">{meta}</div>
         </div>
       )}
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="block">
         <defs>
           <linearGradient id="eq-bg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(16,185,129,0.08)" />
+            <stop offset="0%" stopColor={tone.bg} />
             <stop offset="100%" stopColor="rgba(2,6,23,0)" />
           </linearGradient>
           <linearGradient id="eq-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="rgba(16,185,129,0.35)" />
-            <stop offset="100%" stopColor="rgba(16,185,129,0.02)" />
+            <stop offset="0%" stopColor={tone.fillTop} />
+            <stop offset="100%" stopColor={tone.fillBot} />
           </linearGradient>
           <linearGradient id="eq-stroke" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="rgba(45,212,191,0.95)" />
-            <stop offset="100%" stopColor="rgba(110,231,183,0.95)" />
+            <stop offset="0%" stopColor={tone.s0} />
+            <stop offset="100%" stopColor={tone.s1} />
           </linearGradient>
           <filter id="eq-glow" x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="2.5" result="blur" />
@@ -286,12 +315,11 @@ export function EquityChartImpl({
           </filter>
         </defs>
 
-        <rect x={padLeft} y={padTop} width={w - padLeft - padRight} height={h - padTop - padBottom} fill="url(#eq-bg)" />
 
         {yTicks.map((t) => (
           <g key={`y-${t.y.toFixed(2)}`}>
             <line x1={padLeft} x2={w - padRight} y1={t.y} y2={t.y} stroke="rgba(255,255,255,0.08)" strokeDasharray="2 4" />
-            <text x={w - 8} y={t.y - 4} fontSize="14" textAnchor="end" className="fill-zinc-400 font-mono">
+            <text x={w - 8} y={t.y + 5} fontSize="14" textAnchor="end" className="fill-zinc-400 font-mono">
               {num(t.val, 2)}
             </text>
           </g>
@@ -303,18 +331,20 @@ export function EquityChartImpl({
         <path d={lineD} fill="none" stroke="url(#eq-stroke)" strokeWidth="2.8" filter="url(#eq-glow)" />
 
         <circle cx={toX(0)} cy={firstY} r="3.2" fill="rgba(167,139,250,0.95)" />
-        <circle cx={toX(chartPoints.length - 1)} cy={lastY} r="4" fill="rgba(16,185,129,1)" />
-        <text x={toX(chartPoints.length - 1) + 8} y={lastY - 10} fontSize="10" className="fill-emerald-300 font-mono">
-          {num(last?.equity ?? null, 2)}
-        </text>
+        <circle cx={toX(chartPoints.length - 1)} cy={lastY} r="4" fill={tone.dot} />
+        {chartPoints.length - 1 !== peakIdx && chartPoints.length - 1 !== troughIdx && (
+          <text x={toX(chartPoints.length - 1) - 8} y={lastY - 10} fontSize="11" textAnchor="end" className={`${tone.text} font-mono`}>
+            {num(last?.equity ?? null, 2)}
+          </text>
+        )}
 
         <circle cx={peakX} cy={peakY} r="3.8" fill="rgba(16,185,129,0.95)" />
-        <text x={peakX + 8} y={peakY - 8} fontSize="10" className="fill-emerald-200 font-mono">
+        <text x={peakX > w - padRight - 110 ? peakX - 8 : peakX + 8} y={Math.max(padTop + 10, peakY - 8)} fontSize="11" textAnchor={peakX > w - padRight - 110 ? "end" : "start"} className="fill-emerald-200 font-mono">
           peak {num(chartPoints[peakIdx]?.equity ?? null, 2)}
         </text>
 
         <circle cx={troughX} cy={troughY} r="3.4" fill="rgba(244,63,94,0.92)" />
-        <text x={troughX + 8} y={troughY + 14} fontSize="10" className="fill-rose-200 font-mono">
+        <text x={troughX > w - padRight - 110 ? troughX - 8 : troughX + 8} y={Math.min(h - padBottom - 6, troughY + 14)} fontSize="11" textAnchor={troughX > w - padRight - 110 ? "end" : "start"} className="fill-rose-200 font-mono">
           min {num(chartPoints[troughIdx]?.equity ?? null, 2)}
         </text>
 
@@ -323,7 +353,7 @@ export function EquityChartImpl({
           <g key={`x-${t.idx}`}>
             <line x1={t.x} x2={t.x} y1={padTop} y2={h - padBottom} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 5" />
             <line x1={t.x} x2={t.x} y1={h - padBottom} y2={h - padBottom + 6} stroke="rgba(255,255,255,0.25)" />
-            <text x={t.x} y={h - 8} fontSize="14" textAnchor="middle" className="fill-zinc-400 font-mono">
+            <text x={t.x} y={h - 8} fontSize="14" textAnchor={t.x < padLeft + 34 ? "start" : t.x > w - 34 ? "end" : "middle"} className="fill-zinc-400 font-mono">
               {t.label}
             </text>
           </g>
@@ -890,7 +920,7 @@ export function StartsByTimeChartImpl({
   const bestBad = bins.reduce((best, cur) => (cur[1].bad > best[1].bad ? cur : best), bins[0]);
 
   return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -994,10 +1024,10 @@ export function StartsEndsByTimeChartImpl({
   xFrom?: number | null;
   xTo?: number | null;
 }) {
-  const w = fullscreen ? 2800 : 1100;
+  const [boxRef, w] = useBlockWidth(fullscreen ? 2800 : 1100);
   const h = 360;
-  const padLeft = 22;
-  const padRight = 40;
+  const padLeft = 14;
+  const padRight = 56; // gutter for the count labels, outside the bars
   const padTop = 56;
   const padBottom = 40;
 
@@ -1038,12 +1068,13 @@ export function StartsEndsByTimeChartImpl({
   const plotW = w - padLeft - padRight;
   const plotH = h - padTop - padBottom;
   const barGap = 2;
-  const groupW = Math.max(8, Math.floor(plotW / bins.length) - barGap);
-  const barW = Math.max(3, Math.floor((groupW - 1) / 2));
+  // Fit the bins to the plot exactly (floor() used to leave a ragged strip on the right).
+  const groupW = Math.max(6, plotW / bins.length - barGap);
+  const barW = Math.max(2, (groupW - 1) / 2);
   const yTicks = [0, Math.ceil(maxY * 0.33), Math.ceil(maxY * 0.66), maxY];
 
   return (
-    <div className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div ref={boxRef} className="scanner-glass-card relative w-full h-[360px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -1062,7 +1093,7 @@ export function StartsEndsByTimeChartImpl({
         </div>
       </div>
 
-      <svg viewBox={`0 0 ${w} ${h}`} className="block w-full h-full">
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="block">
         <defs>
           <linearGradient id="se-start" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor="rgba(110,231,183,0.95)" />
@@ -1079,7 +1110,7 @@ export function StartsEndsByTimeChartImpl({
           return (
             <g key={`y-${t}`}>
               <line x1={padLeft} x2={w - padRight} y1={y} y2={y} stroke="rgba(255,255,255,0.05)" strokeDasharray="2 4" />
-              <text x={w - 8} y={y - 3} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
+              <text x={w - 8} y={y + 5} textAnchor="end" fontSize="14" className="fill-zinc-400 font-mono">
                 {t}
               </text>
             </g>
@@ -1219,7 +1250,7 @@ export function PeakStrengthByTimeChartImpl({
   })();
 
   return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -1446,7 +1477,7 @@ export function PeakReversionTwoThirdsChartImpl({
   })();
 
   return (
-    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+    <div className="scanner-glass-card relative w-full h-[320px] rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 overflow-hidden shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>

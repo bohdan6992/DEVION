@@ -157,6 +157,7 @@ export function SifterProvider({
   initialIsPopout?: boolean;
 }) {
   const pollRef = useRef<number | null>(null);
+  const pollInFlightRef = useRef(false);
   const bcRef = useRef<BroadcastChannel | null>(null);
 
   // state ref used by memoized actions
@@ -332,6 +333,8 @@ export function SifterProvider({
     stopPoll();
 
     pollRef.current = window.setInterval(async () => {
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
       try {
         const st: TickerdaysStatus = await getTickerdaysStatus(requestId);
 
@@ -386,6 +389,8 @@ export function SifterProvider({
           syncToOthers(next);
           return { ...prev, ...next };
         });
+      } finally {
+        pollInFlightRef.current = false;
       }
     }, 700);
   };

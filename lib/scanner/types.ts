@@ -297,8 +297,6 @@ export type ScannerLogContext = {
   closeMode: string;
   priceMode: string;
   pnlMode: string;
-  scopeMode: string;
-  topN: number;
   offset: number;
   startAbs: number;
   startAbsMax: string;

@@ -70,8 +70,6 @@ export function ScannerAnalyticsLogImpl({
 
   function buildExecContext(): string {
     return [
-      `scope=${context.scopeMode}`,
-      `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
       `offset=${context.offset}`,
       `zap=${context.zapMode}`,
     ].join(" | ");

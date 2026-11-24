@@ -103,13 +103,6 @@ export default function MyApp({
         })();
       `}</Script>
 
-      <Script
-        id="tv-js"
-        src="https://s3.tradingview.com/tv.js"
-        strategy="afterInteractive"
-        crossOrigin="anonymous"
-      />
-
       {!mounted ? null : (
         <UiProvider initialTheme={initialTheme} initialLang={initialLang}>
           <AppThemeBackground />

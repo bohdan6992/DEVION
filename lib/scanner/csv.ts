@@ -90,8 +90,6 @@ export function downloadEpisodesCsv(
       : "";
     const execContext = context
       ? [
-          `scope=${context.scopeMode}`,
-          `top=${context.scopeMode === "ALL" ? "ALL" : context.topN}`,
           `offset=${context.offset}`,
           `zap=${context.zapMode}`,
         ].join(" | ")

@@ -513,7 +513,7 @@ export type ArbitrageSignalsClass =
   | "blue"
   | "post";
 export type ArbitrageSignalsType = "any" | "hard" | "soft";
-export type ArbitrageSignalsMode = "all" | "top";
+export type ArbitrageSignalsMode = "all";
 
 export type ArbitrageSignalsResponse = {
   ok: boolean;

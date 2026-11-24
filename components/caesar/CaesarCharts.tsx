@@ -810,7 +810,7 @@ function EfficiencyConeChart({
   const hoverPct = hovered && width > 0 ? (hovered.xCenter / width) * 100 : 50;
 
   return (
-    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl`}>
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -1075,7 +1075,7 @@ function LinesChart({
     .join(" ");
 
   return (
-    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl`}>
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -1330,7 +1330,7 @@ function LongShortHistogram({
   const hoverPct = hoverMin == null ? 0 : (x(hoverMin) / width) * 100;
 
   return (
-    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80`}>
+    <div className={`scanner-glass-card relative m-0 ${heightClass} w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl`}>
       {(title || meta) && (
         <div className="absolute top-2 left-3 right-3 z-10 flex items-center justify-between">
           <div className="text-[10px] uppercase tracking-widest font-mono text-zinc-500">{title}</div>
@@ -2236,7 +2236,7 @@ export default function CaesarCharts({
           All three blocks share the donut's own height via heightPx/heightClass, so the row stays
           one even line. */}
       <div className="mt-3 grid gap-4 lg:grid-cols-[384px_1fr_384px]">
-        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
           <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
             <span>ACTIVE ACCOUNT BOOK</span>
             <span className="text-zinc-600">{totalActive} total</span>
@@ -2262,7 +2262,7 @@ export default function CaesarCharts({
           onHoverKey={setHoverKey}
         />
 
-        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+        <figure className="scanner-glass-card relative m-0 flex h-[384px] w-full items-center justify-center overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
           <figcaption className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-zinc-500">
             <span>STRATEGY SHAPE</span>
             <span className="text-zinc-600">now, per axis</span>
@@ -2276,7 +2276,7 @@ export default function CaesarCharts({
           середині" — in the bottom row, in the middle — and make all three equal width). ---------- */}
       <div className="mt-3 grid gap-4 lg:grid-cols-3">
           {/* ---------- ARRIVALS ---------- */}
-          <figure className="scanner-glass-card relative m-0 h-[384px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80">
+          <figure className="scanner-glass-card relative m-0 h-[384px] w-full overflow-hidden rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl transition-all duration-300 hover:border-white/[0.12] hover:bg-[#0a0a0a]/80 backdrop-blur-xl">
             <div className="absolute left-3 right-3 top-2 z-10 flex items-center justify-between">
               <figcaption className="font-mono text-[10px] uppercase tracking-widest text-zinc-500">
                 Entered during the segment

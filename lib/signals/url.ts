@@ -35,7 +35,7 @@
 export type SignalsClass =
   | "blue" | "ark" | "pre" | "print" | "open" | "intra" | "post" | "global";
 export type SignalsType = "any" | "hard" | "soft";
-export type SignalsMode = "top" | "all";
+export type SignalsMode = "all";
 export type SignalsRatingMode = "SESSION" | "BIN" | "BINS";
 export type SignalsZapMode = "zap" | "sigma" | "delta" | "off";
 

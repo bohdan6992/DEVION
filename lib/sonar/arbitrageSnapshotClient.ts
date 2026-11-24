@@ -49,7 +49,6 @@ export type SonarFilterFunnel = {
   rejectedByList: number;
   rejectedByRange: number;
   rejectedByRating: number;
-  rejectedByTopWindow: number;
   rejectedByExclude: number;
   rejectedByGeo: number;
   rejectedByReport: number;

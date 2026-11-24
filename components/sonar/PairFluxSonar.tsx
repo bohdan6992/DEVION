@@ -94,6 +94,7 @@ import { getLiveStrategy } from "@/lib/strategies/registry";
 import PairFluxDivergence from "@/components/pairflux/PairFluxDivergence";
 import type { LivePair } from "@/lib/pairflux/livePairs";
 import { subscribeSharedPoll } from "@/lib/caesar/sharedPoll";
+import { fetchSharedLiveSnapshot } from "@/lib/sonar/liveSnapshotClient";
 import {
   toArbitrageSonarLiveParams,
   type SonarSignalRow,
@@ -113,12 +114,8 @@ const SONAR_NAV = getLiveStrategy("pairflux")!.nav;
 export { normalizeSignal };
 export type { ArbitrageSignal };
 
-type Mode = "top" | "all";
+type Mode = "all";
 type TriMode = "off" | "include" | "exclude";
-type TopWindow = { lo: number; hi: number; rate: number; total: number } | null;
-type TopWindowTime = { band: string; rate: number; total: number } | null;
-type TopWindowEntry = { sigma: TopWindow; bench: TopWindow; time: TopWindowTime };
-type TopWindows = Partial<Record<string, Partial<Record<"pos" | "neg", TopWindowEntry>>>>;
 type BetaKey = "lt1" | "b1_1_5" | "b1_5_2" | "gt2" | "unknown";
 type RowPair = { short?: ArbitrageSignal; long?: ArbitrageSignal };
 type BucketGroup = { id: string; benchmark: string; betaKey: BetaKey; rows: RowPair[] };
@@ -623,41 +620,6 @@ function getSessionBinRating(
   const total = toNum(entry.t ?? entry.total ?? entry.Total);
   if (rate == null || total == null) return null;
   return { rate, total };
-}
-
-function getTopWindows(signal: ArbitrageSignal, cls: ArbClass): TopWindows[string] | null {
-  const root = safeRecord(getBestParams(signal));
-  const tw = safeRecord(root?.top_windows ?? root?.TopWindows);
-  return safeRecord(tw?.[sonarClassToBinClassKey(cls)]) ?? null;
-}
-
-function getSignalBenchPct(signal: ArbitrageSignal): number | null {
-  const bid = toNum(signal?.bidBench);
-  const ask = toNum(signal?.askBench);
-  if (bid != null && ask != null) return (bid + ask) / 2;
-  return bid ?? ask ?? null;
-}
-
-function currentMarketTimeBand(bandMinutes: number): string | null {
-  try {
-    const now = new Date();
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(now);
-    const h = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
-    const min = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
-    if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
-    const m = Math.floor(min / bandMinutes) * bandMinutes;
-    const totalEnd = h * 60 + m + bandMinutes;
-    const eh = Math.floor(totalEnd / 60) % 24;
-    const em = totalEnd % 60;
-    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
-  } catch {
-    return null;
-  }
 }
 
 /* =========================
@@ -1397,10 +1359,6 @@ export type SonarExactFilterSnapshot = {
   minTotal: number | string;
   tickersFilterNorm: string;
   listMode: ListMode;
-  topMode: boolean;
-  topSigmaOn: boolean;
-  topBenchOn: boolean;
-  topTimeOn: boolean;
   ignoreSet: Set<string>;
   applySet: Set<string>;
   pinMap: Record<string, string>;
@@ -2035,10 +1993,6 @@ export default function PairFluxSonar() {
   const [ignoreRatings, setIgnoreRatings] = useState(false);
   // Fixed for this page: SESSION rating and ALL scope, no UI can change them and saved state never restores them.
   const ratingMode = "SESSION" as const;
-  const topMode = false;
-  const topSigmaOn = false;
-  const topBenchOn = false;
-  const topTimeOn = false;
 
   type NumField = {
     label: string;
@@ -3388,10 +3342,6 @@ export default function PairFluxSonar() {
       zapSilverAbs,
       zapGoldAbs,
 
-      topMode,
-      topSigmaOn,
-      topBenchOn,
-      topTimeOn,
 
     };
   }, [
@@ -3406,7 +3356,6 @@ export default function PairFluxSonar() {
     filterReport, equityType,
     corrMin, corrMax, betaMin, betaMax, sigmaMin, sigmaMax,
     zapMode, zapShowAbs,  zapSilverAbs, zapGoldAbs,
-    topMode, topSigmaOn, topBenchOn, topTimeOn,
 
   ]);
 
@@ -3641,12 +3590,9 @@ export default function PairFluxSonar() {
       "PreMhVol","PreMhVolNF",
       "SpreadBid%",
     ].join(",");
-    fetch(`${BRIDGE_BASE}/api/live/snapshot?tickers=${encodeURIComponent(tk)}&fields=${encodeURIComponent(LIVE_FIELDS)}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        const item = Array.isArray(data?.items) ? data.items[0] : null;
-        setLiveSnap(item?.Fields ?? item?.fields ?? null);
+    fetchSharedLiveSnapshot(tk, LIVE_FIELDS)
+      .then((snapshot) => {
+        if (!cancelled) setLiveSnap(snapshot);
       })
       .catch(() => { if (!cancelled) setLiveSnap(null); });
     return () => { cancelled = true; };
@@ -4124,7 +4070,7 @@ export default function PairFluxSonar() {
             <>
 
               {/* ALL/TOP + σ/MKT/TIME, and SESSION/BIN/BINS, removed for this page (2026-10-05, the
-                  operator's own instruction). ratingMode and topMode are fixed now, so nothing in the UI can
+                  operator's own instruction). ratingMode is fixed now, so nothing in the UI can
                   turn the TOP filter on. RATE/UNIVERSE takes their place, styled and named exactly like
                   ArbitrageSonar's own button: drops the rating gate entirely when on. */}
               <button

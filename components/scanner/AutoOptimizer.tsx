@@ -252,6 +252,7 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
   const [resultRange, setResultRange] = useState<{ from: string; to: string }>({ from: initialFrom, to: initialTo });
   const [mounted, setMounted] = useState(false);
   const pollRef = useRef<number | null>(null);
+  const pollActiveRef = useRef(false);
 
   useEffect(() => setMounted(true), []);
 
@@ -295,7 +296,9 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
   }, [current.startAbs, current.startAbsNeg, current.startAbsMax, current.endAbs, current.closeMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopPolling = useCallback(() => {
+    pollActiveRef.current = false;
     if (pollRef.current != null) window.clearInterval(pollRef.current);
+    if (pollRef.current != null) window.clearTimeout(pollRef.current);
     pollRef.current = null;
   }, []);
   useEffect(() => stopPolling, [stopPolling]);
@@ -403,26 +406,36 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
       const id = await startAutoOptimizer(apiBase, body);
       setJobId(id);
       stopPolling();
+      pollActiveRef.current = true;
       const tick = async () => {
+        let keepPolling = true;
         try {
           const s = await pollAutoOptimizer(apiBase, id);
           setProgress(s.progress);
           setMessage(s.message);
-          if (s.status === "running") return;
-          stopPolling();
-          setStatus(s.status);
-          if (s.status === "done") setResult(s.result);
-          if (s.status === "error") setError(s.error ?? "search failed");
+          if (s.status !== "running") {
+            keepPolling = false;
+            stopPolling();
+            setStatus(s.status);
+            if (s.status === "done") setResult(s.result);
+            if (s.status === "error") setError(s.error ?? "search failed");
+          }
         } catch (e: any) {
           // A dropped poll is not a failed search: keep asking. A bridge that forgot the job is.
           if (/404/.test(String(e?.message))) {
+            keepPolling = false;
             stopPolling();
             setStatus("error");
             setError("The bridge no longer knows this search (it restarted?). Run it again.");
           }
+        } finally {
+          // Schedule only after the previous request completes; a slow bridge cannot create
+          // overlapping status requests.
+          if (keepPolling && pollActiveRef.current) {
+            pollRef.current = window.setTimeout(() => void tick(), 1200);
+          }
         }
       };
-      pollRef.current = window.setInterval(tick, 1200);
       void tick();
     } catch (e: any) {
       setStatus("error");
@@ -447,8 +460,8 @@ export default function AutoOptimizer(props: AutoOptimizerProps) {
 
   const card = (
       <div className={inline
-        ? "scanner-glass-card relative w-full rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl"
-        : "scanner-glass-card relative w-full max-w-[1480px] rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/95 shadow-[0_20px_80px_rgba(0,0,0,0.55)]"}>
+        ? "scanner-glass-card relative w-full rounded-2xl border border-white/[0.06] bg-[#0a0a0a]/60 shadow-xl backdrop-blur-xl"
+        : "scanner-glass-card relative w-full max-w-[1480px] rounded-2xl border border-white/[0.08] bg-[#0a0a0a]/95 shadow-[0_20px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl"}>
         {/* ---- title ---- */}
         <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-3">
           <div className="flex items-baseline gap-3">

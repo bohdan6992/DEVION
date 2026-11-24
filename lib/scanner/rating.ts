@@ -104,7 +104,6 @@ export type ParsedBestParams = {
   sigmaBinStep: number;
   sigmaBinMin: number;
   sigmaBinMax: number;
-  topWindows: Record<string, any> | null;
 };
 
 export const EMPTY_PARSED_BEST_PARAMS: ParsedBestParams = {
@@ -113,7 +112,6 @@ export const EMPTY_PARSED_BEST_PARAMS: ParsedBestParams = {
   sigmaBinStep: 0.5,
   sigmaBinMin: 0.5,
   sigmaBinMax: 10.0,
-  topWindows: null,
 };
 
 export const parsedBestParamsCache = new WeakMap<object, ParsedBestParams>();
@@ -133,7 +131,6 @@ export function parseBestParams(row: any): ParsedBestParams {
     sigmaBinStep: Number(sigBinParams?.step ?? 0.5),
     sigmaBinMin: Number(sigBinParams?.min ?? 0.5),
     sigmaBinMax: Number(sigBinParams?.max ?? 10.0),
-    topWindows: safeObj(root.top_windows ?? root.TopWindows),
   };
   parsedBestParamsCache.set(root, parsed);
   return parsed;
@@ -218,45 +215,6 @@ export function scannerSigBinSnapshot(args: {
   const total = optNumOrNull(entry.t ?? entry.total ?? entry.Total);
   if (rate == null || total == null) return null;
   return { rate, total };
-}
-
-export function scannerTopWindowSnapshot(args: {
-  row: any;
-  session: PaperArbSession;
-  side: TapeArbSide;
-  sigmaAbs: number | null | undefined;
-}): { sigma: { lo: number; hi: number } | null; bench: { lo: number; hi: number } | null; time: { band: string } | null } | null {
-  const { row, session, side, sigmaAbs } = args;
-  const signKey = binSignKeyForSide(side);
-  if (!signKey) return null;
-  const classKey = ratingBandToBinClassKey(ratingBandFromSession(session));
-  const tw = safeObj(parseBestParams(row).topWindows?.[classKey]);
-  const entry = safeObj(tw?.[signKey]);
-  if (!entry) return null;
-  const sigmaTw = safeObj(entry.sigma);
-  const benchTw = safeObj(entry.bench);
-  const timeTw = safeObj(entry.time);
-  return {
-    sigma: sigmaTw && optNumOrNull(sigmaTw.lo) != null && optNumOrNull(sigmaTw.hi) != null
-      ? { lo: Number(sigmaTw.lo), hi: Number(sigmaTw.hi) }
-      : null,
-    bench: benchTw && optNumOrNull(benchTw.lo) != null && optNumOrNull(benchTw.hi) != null
-      ? { lo: Number(benchTw.lo), hi: Number(benchTw.hi) }
-      : null,
-    time: timeTw && typeof timeTw.band === "string" ? { band: timeTw.band } : null,
-  };
-}
-
-export function scannerCurrentTimeBand(bandMinutes: number): string {
-  const now = new Date();
-  const etMs = now.getTime() - 4 * 60 * 60 * 1000;
-  const et = new Date(etMs);
-  const h = et.getUTCHours();
-  const m = Math.floor(et.getUTCMinutes() / bandMinutes) * bandMinutes;
-  const totalEnd = h * 60 + m + bandMinutes;
-  const eh = Math.floor(totalEnd / 60) % 24;
-  const em = totalEnd % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}-${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`;
 }
 
 export function passesScannerBinRatingFilter(args: {

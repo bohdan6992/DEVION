@@ -1,5 +1,5 @@
 {
-  "updatedAt": "2026-11-22T15:48:45.514Z",
+  "updatedAt": "2026-11-24T12:13:08.371Z",
   "source": "nasdaq",
   "items": [
     {
@@ -8,17 +8,8 @@
       "company": "Accenture plc",
       "sector": "",
       "time": "",
-      "marketCap": 146169430000,
+      "marketCap": 147901432000,
       "epsForecast": "$3.19"
-    },
-    {
-      "date": "2026-10-01",
-      "ticker": "NKE",
-      "company": "Nike, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 50990653000,
-      "epsForecast": "$0.43"
     },
     {
       "date": "2026-10-08",
@@ -26,7 +17,7 @@
       "company": "Pepsico, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 189421011000,
+      "marketCap": 191519638000,
       "epsForecast": "$2.29"
     },
     {
@@ -35,7 +26,7 @@
       "company": "Delta Air Lines, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 54718575000,
+      "marketCap": 52639568000,
       "epsForecast": "$1.80"
     },
     {
@@ -44,7 +35,7 @@
       "company": "J P Morgan Chase & Co",
       "sector": "",
       "time": "",
-      "marketCap": 850379280000,
+      "marketCap": 824646430000,
       "epsForecast": "$5.94"
     },
     {
@@ -53,7 +44,7 @@
       "company": "Johnson & Johnson",
       "sector": "",
       "time": "",
-      "marketCap": 643088840000,
+      "marketCap": 651105210000,
       "epsForecast": "$2.53"
     },
     {
@@ -62,17 +53,8 @@
       "company": "UnitedHealth Group Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 296117567000,
+      "marketCap": 304513286000,
       "epsForecast": "$4.12"
-    },
-    {
-      "date": "2026-10-13",
-      "ticker": "GS",
-      "company": "The Goldman Sachs Group, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 244456964000,
-      "epsForecast": "$12.90"
     },
     {
       "date": "2026-10-13",
@@ -80,8 +62,17 @@
       "company": "Wells Fargo & Company",
       "sector": "",
       "time": "",
-      "marketCap": 241979146000,
+      "marketCap": 236005474000,
       "epsForecast": "$1.85"
+    },
+    {
+      "date": "2026-10-13",
+      "ticker": "GS",
+      "company": "The Goldman Sachs Group, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 228062347000,
+      "epsForecast": "$12.90"
     },
     {
       "date": "2026-10-13",
@@ -89,7 +80,7 @@
       "company": "Citigroup Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 190811455000,
+      "marketCap": 183098229000,
       "epsForecast": "$2.66"
     },
     {
@@ -98,7 +89,7 @@
       "company": "ASML Holding N.V.",
       "sector": "",
       "time": "",
-      "marketCap": 522703438000,
+      "marketCap": 488023556000,
       "epsForecast": "$12.47"
     },
     {
@@ -107,7 +98,7 @@
       "company": "Bank of America Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 335143141000,
+      "marketCap": 324585816000,
       "epsForecast": "$1.11"
     },
     {
@@ -116,7 +107,7 @@
       "company": "Morgan Stanley",
       "sector": "",
       "time": "",
-      "marketCap": 273843700000,
+      "marketCap": 259273556000,
       "epsForecast": "$2.83"
     },
     {
@@ -125,7 +116,7 @@
       "company": "BlackRock, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 175395668000,
+      "marketCap": 170131374000,
       "epsForecast": "$14.01"
     },
     {
@@ -134,7 +125,7 @@
       "company": "Progressive Corporation (The)",
       "sector": "",
       "time": "",
-      "marketCap": 133230125000,
+      "marketCap": 134058615000,
       "epsForecast": "$4.46"
     },
     {
@@ -143,7 +134,7 @@
       "company": "Fastenal Company",
       "sector": "",
       "time": "",
-      "marketCap": 60439843000,
+      "marketCap": 58064929000,
       "epsForecast": "$0.34"
     },
     {
@@ -152,7 +143,7 @@
       "company": "Taiwan Semiconductor Manufacturing Company Ltd.",
       "sector": "",
       "time": "",
-      "marketCap": 1826116470000,
+      "marketCap": 1652990940000,
       "epsForecast": "$4.45"
     },
     {
@@ -161,7 +152,7 @@
       "company": "The Charles Schwab Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 158999822000,
+      "marketCap": 155616854000,
       "epsForecast": "$1.66"
     },
     {
@@ -170,17 +161,8 @@
       "company": "Prologis, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 117255283000,
+      "marketCap": 116437844000,
       "epsForecast": "$1.58"
-    },
-    {
-      "date": "2026-10-15",
-      "ticker": "BNY",
-      "company": "The Bank Of New York Mellon Corporation",
-      "sector": "",
-      "time": "",
-      "marketCap": 97455890000,
-      "epsForecast": "$2.26"
     },
     {
       "date": "2026-10-15",
@@ -188,8 +170,17 @@
       "company": "Marsh",
       "sector": "",
       "time": "",
-      "marketCap": 97318765000,
+      "marketCap": 98060567000,
       "epsForecast": "$1.96"
+    },
+    {
+      "date": "2026-10-15",
+      "ticker": "BNY",
+      "company": "The Bank Of New York Mellon Corporation",
+      "sector": "",
+      "time": "",
+      "marketCap": 95040184000,
+      "epsForecast": "$2.26"
     },
     {
       "date": "2026-10-15",
@@ -197,7 +188,7 @@
       "company": "U.S. Bancorp",
       "sector": "",
       "time": "",
-      "marketCap": 89223037000,
+      "marketCap": 87337607000,
       "epsForecast": "$1.32"
     },
     {
@@ -206,7 +197,7 @@
       "company": "PNC Financial Services Group, Inc. (The)",
       "sector": "",
       "time": "",
-      "marketCap": 86497608000,
+      "marketCap": 84561330000,
       "epsForecast": "$4.97"
     },
     {
@@ -215,7 +206,7 @@
       "company": "The Travelers Companies, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 80054092000,
+      "marketCap": 80593101000,
       "epsForecast": "$7.07"
     },
     {
@@ -224,7 +215,7 @@
       "company": "Truist Financial Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 55933452000,
+      "marketCap": 54902755000,
       "epsForecast": "$1.17"
     },
     {
@@ -233,7 +224,7 @@
       "company": "Space Exploration Technologies Corp.",
       "sector": "",
       "time": "",
-      "marketCap": 1880026640000,
+      "marketCap": 1735524090000,
       "epsForecast": "$0.10"
     },
     {
@@ -242,7 +233,7 @@
       "company": "GE Aerospace",
       "sector": "",
       "time": "",
-      "marketCap": 329515270000,
+      "marketCap": 319946424000,
       "epsForecast": "$2.02"
     },
     {
@@ -251,7 +242,7 @@
       "company": "RTX Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 261035786000,
+      "marketCap": 256623116000,
       "epsForecast": "$1.78"
     },
     {
@@ -260,7 +251,7 @@
       "company": "Netflix, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 240055812000,
+      "marketCap": 232951874000,
       "epsForecast": "$0.82"
     },
     {
@@ -269,7 +260,7 @@
       "company": "Chubb Limited",
       "sector": "",
       "time": "",
-      "marketCap": 141411336000,
+      "marketCap": 141992100000,
       "epsForecast": "$6.53"
     },
     {
@@ -278,7 +269,7 @@
       "company": "Intuitive Surgical, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 141167182000,
+      "marketCap": 138328179000,
       "epsForecast": "$2.13"
     },
     {
@@ -287,7 +278,7 @@
       "company": "Capital One Financial Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 109334667000,
+      "marketCap": 107469914000,
       "epsForecast": "$5.45"
     },
     {
@@ -296,7 +287,7 @@
       "company": "3M Company",
       "sector": "",
       "time": "",
-      "marketCap": 92220727000,
+      "marketCap": 91972698000,
       "epsForecast": "$2.40"
     },
     {
@@ -305,7 +296,7 @@
       "company": "Northrop Grumman Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 77042991000,
+      "marketCap": 75906474000,
       "epsForecast": "$7.22"
     },
     {
@@ -314,7 +305,7 @@
       "company": "America Movil, S.A.B. de C.V.",
       "sector": "",
       "time": "",
-      "marketCap": 74762191000,
+      "marketCap": 74671899000,
       "epsForecast": "$0.46"
     },
     {
@@ -323,7 +314,7 @@
       "company": "General Motors Company",
       "sector": "",
       "time": "",
-      "marketCap": 68960166000,
+      "marketCap": 66395775000,
       "epsForecast": "$3.55"
     },
     {
@@ -332,7 +323,7 @@
       "company": "Meta Platforms, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 1524082150000,
+      "marketCap": 1433642340000,
       "epsForecast": "$6.52"
     },
     {
@@ -341,7 +332,7 @@
       "company": "Tesla, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 1479952040000,
+      "marketCap": 1366942810000,
       "epsForecast": "$0.22"
     },
     {
@@ -350,17 +341,8 @@
       "company": "Philip Morris International Inc",
       "sector": "",
       "time": "",
-      "marketCap": 290580169000,
+      "marketCap": 286932926000,
       "epsForecast": "$2.30"
-    },
-    {
-      "date": "2026-10-21",
-      "ticker": "TXN",
-      "company": "Texas Instruments Incorporated",
-      "sector": "",
-      "time": "",
-      "marketCap": 261109875000,
-      "epsForecast": "$2.40"
     },
     {
       "date": "2026-10-21",
@@ -368,17 +350,8 @@
       "company": "Thermo Fisher Scientific Inc",
       "sector": "",
       "time": "",
-      "marketCap": 255192809000,
+      "marketCap": 248075190000,
       "epsForecast": "$6.40"
-    },
-    {
-      "date": "2026-10-21",
-      "ticker": "LRCX",
-      "company": "Lam Research Corporation",
-      "sector": "",
-      "time": "",
-      "marketCap": 254431150000,
-      "epsForecast": "$2.17"
     },
     {
       "date": "2026-10-21",
@@ -386,8 +359,26 @@
       "company": "SAP SE",
       "sector": "",
       "time": "",
-      "marketCap": 249668911000,
+      "marketCap": 244386349000,
       "epsForecast": "$2.03"
+    },
+    {
+      "date": "2026-10-21",
+      "ticker": "TXN",
+      "company": "Texas Instruments Incorporated",
+      "sector": "",
+      "time": "",
+      "marketCap": 241006920000,
+      "epsForecast": "$2.40"
+    },
+    {
+      "date": "2026-10-21",
+      "ticker": "LRCX",
+      "company": "Lam Research Corporation",
+      "sector": "",
+      "time": "",
+      "marketCap": 228935565000,
+      "epsForecast": "$2.17"
     },
     {
       "date": "2026-10-21",
@@ -395,7 +386,7 @@
       "company": "International Business Machines Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 211593642000,
+      "marketCap": 212122911000,
       "epsForecast": "$2.88"
     },
     {
@@ -404,7 +395,7 @@
       "company": "Abbott Laboratories",
       "sector": "",
       "time": "",
-      "marketCap": 179896779000,
+      "marketCap": 178389991000,
       "epsForecast": "$1.43"
     },
     {
@@ -413,7 +404,7 @@
       "company": "NextEra Energy, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 175733277000,
+      "marketCap": 175020196000,
       "epsForecast": "$1.20"
     },
     {
@@ -422,7 +413,7 @@
       "company": "Danaher Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 160095470000,
+      "marketCap": 155030045000,
       "epsForecast": "$1.92"
     },
     {
@@ -431,7 +422,7 @@
       "company": "AT&T Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 147191939000,
+      "marketCap": 150290727000,
       "epsForecast": "$0.61"
     },
     {
@@ -440,7 +431,7 @@
       "company": "Southern Copper Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 119440802000,
+      "marketCap": 113158881000,
       "epsForecast": "$2.04"
     },
     {
@@ -449,7 +440,7 @@
       "company": "CME Group Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 109637960000,
+      "marketCap": 110085374000,
       "epsForecast": "$2.98"
     },
     {
@@ -458,7 +449,7 @@
       "company": "CSX Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 92133040000,
+      "marketCap": 90510852000,
       "epsForecast": "$0.52"
     },
     {
@@ -467,7 +458,7 @@
       "company": "Elevance Health, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 84296368000,
+      "marketCap": 85229732000,
       "epsForecast": "$4.66"
     },
     {
@@ -476,7 +467,7 @@
       "company": "Moody's Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 81345217000,
+      "marketCap": 80481493000,
       "epsForecast": "$4.25"
     },
     {
@@ -485,7 +476,7 @@
       "company": "Kinder Morgan, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 69259665000,
+      "marketCap": 67633435000,
       "epsForecast": "$0.33"
     },
     {
@@ -494,7 +485,7 @@
       "company": "United Rentals, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 65604342000,
+      "marketCap": 60271464000,
       "epsForecast": "$13.83"
     },
     {
@@ -503,7 +494,7 @@
       "company": "Procter & Gamble Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 389039915000,
+      "marketCap": 392562934000,
       "epsForecast": "$1.89"
     },
     {
@@ -512,7 +503,7 @@
       "company": "Union Pacific Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 172707004000,
+      "marketCap": 170722198000,
       "epsForecast": "$3.47"
     },
     {
@@ -521,7 +512,7 @@
       "company": "Lockheed Martin Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 132100006000,
+      "marketCap": 130633122000,
       "epsForecast": "$7.49"
     },
     {
@@ -530,17 +521,8 @@
       "company": "Spotify Technology S.A.",
       "sector": "",
       "time": "",
-      "marketCap": 123041292000,
+      "marketCap": 121604030000,
       "epsForecast": "$3.10"
-    },
-    {
-      "date": "2026-10-22",
-      "ticker": "WDC",
-      "company": "Western Digital Corporation",
-      "sector": "",
-      "time": "",
-      "marketCap": 111091663000,
-      "epsForecast": "$3.99"
     },
     {
       "date": "2026-10-22",
@@ -548,8 +530,17 @@
       "company": "Newmont Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 103971275000,
+      "marketCap": 98390811000,
       "epsForecast": "$1.94"
+    },
+    {
+      "date": "2026-10-22",
+      "ticker": "WDC",
+      "company": "Western Digital Corporation",
+      "sector": "",
+      "time": "",
+      "marketCap": 97739547000,
+      "epsForecast": "$3.99"
     },
     {
       "date": "2026-10-22",
@@ -557,7 +548,7 @@
       "company": "Valero Energy Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 94391214000,
+      "marketCap": 93197591000,
       "epsForecast": "$21.28"
     },
     {
@@ -566,7 +557,7 @@
       "company": "Comcast Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 88278016000,
+      "marketCap": 88420057000,
       "epsForecast": "$0.98"
     },
     {
@@ -575,17 +566,8 @@
       "company": "Blackstone Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 87121863000,
+      "marketCap": 83223577000,
       "epsForecast": "$1.26"
-    },
-    {
-      "date": "2026-10-22",
-      "ticker": "BCS",
-      "company": "Barclays PLC",
-      "sector": "",
-      "time": "",
-      "marketCap": 72276705000,
-      "epsForecast": "$0.67"
     },
     {
       "date": "2026-10-22",
@@ -593,8 +575,17 @@
       "company": "Norfolk Southern Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 71163060000,
+      "marketCap": 69858034000,
       "epsForecast": "$3.48"
+    },
+    {
+      "date": "2026-10-22",
+      "ticker": "BCS",
+      "company": "Barclays PLC",
+      "sector": "",
+      "time": "",
+      "marketCap": 69834883000,
+      "epsForecast": "$0.67"
     },
     {
       "date": "2026-10-22",
@@ -602,7 +593,7 @@
       "company": "Honeywell International Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 69133378000,
+      "marketCap": 67483116000,
       "epsForecast": "$2.17"
     },
     {
@@ -611,7 +602,7 @@
       "company": "argenx SE",
       "sector": "",
       "time": "",
-      "marketCap": 58465722000,
+      "marketCap": 57451614000,
       "epsForecast": "$7.44"
     },
     {
@@ -620,7 +611,7 @@
       "company": "Nasdaq, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 57688379000,
+      "marketCap": 57116766000,
       "epsForecast": "$1.02"
     },
     {
@@ -629,7 +620,7 @@
       "company": "American Express Company",
       "sector": "",
       "time": "",
-      "marketCap": 208615440000,
+      "marketCap": 202305536000,
       "epsForecast": "$4.47"
     },
     {
@@ -638,7 +629,7 @@
       "company": "ENI S.p.A.",
       "sector": "",
       "time": "",
-      "marketCap": 84946928000,
+      "marketCap": 82822857000,
       "epsForecast": "$1.92"
     },
     {
@@ -647,7 +638,7 @@
       "company": "SLB Limited",
       "sector": "",
       "time": "",
-      "marketCap": 70701818000,
+      "marketCap": 67734999000,
       "epsForecast": "$0.62"
     },
     {
@@ -656,7 +647,7 @@
       "company": "Coca Cola Femsa S.A.B. de C.V.",
       "sector": "",
       "time": "",
-      "marketCap": 197898404000,
+      "marketCap": 195528655000,
       "epsForecast": "$1.89"
     },
     {
@@ -665,7 +656,7 @@
       "company": "Verizon Communications Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 189573923000,
+      "marketCap": 192640926000,
       "epsForecast": "$1.27"
     },
     {
@@ -674,7 +665,7 @@
       "company": "Welltower Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 178406588000,
+      "marketCap": 176315793000,
       "epsForecast": "$1.64"
     },
     {
@@ -683,7 +674,7 @@
       "company": "Cadence Design Systems, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 83652674000,
+      "marketCap": 77259637000,
       "epsForecast": "$1.61"
     },
     {
@@ -692,7 +683,7 @@
       "company": "Public Storage",
       "sector": "",
       "time": "",
-      "marketCap": 61032411000,
+      "marketCap": 60802597000,
       "epsForecast": "$4.27"
     },
     {
@@ -701,7 +692,7 @@
       "company": "Nucor Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 55657939000,
+      "marketCap": 53901124000,
       "epsForecast": "$5.71"
     },
     {
@@ -710,7 +701,7 @@
       "company": "Visa Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 725270070000,
+      "marketCap": 724584890000,
       "epsForecast": "$3.43"
     },
     {
@@ -719,7 +710,7 @@
       "company": "Coca-Cola Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 413369795000,
+      "marketCap": 417241498000,
       "epsForecast": "$0.87"
     },
     {
@@ -728,7 +719,7 @@
       "company": "Novartis AG",
       "sector": "",
       "time": "",
-      "marketCap": 288550683000,
+      "marketCap": 287119573000,
       "epsForecast": "$2.25"
     },
     {
@@ -737,7 +728,7 @@
       "company": "HSBC Holdings plc",
       "sector": "",
       "time": "",
-      "marketCap": 287612436000,
+      "marketCap": 277061566000,
       "epsForecast": "$2.13"
     },
     {
@@ -746,7 +737,7 @@
       "company": "S&P Global Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 128327131000,
+      "marketCap": 127431344000,
       "epsForecast": "$4.43"
     },
     {
@@ -755,7 +746,7 @@
       "company": "Boeing Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 127196144000,
+      "marketCap": 123535024000,
       "epsForecast": "($0.21)"
     },
     {
@@ -764,7 +755,7 @@
       "company": "Seagate Technology Holdings PLC",
       "sector": "",
       "time": "",
-      "marketCap": 119690863000,
+      "marketCap": 104911725000,
       "epsForecast": "$7.17"
     },
     {
@@ -773,7 +764,7 @@
       "company": "HCA Healthcare, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 96159482000,
+      "marketCap": 99343008000,
       "epsForecast": "$6.74"
     },
     {
@@ -782,7 +773,7 @@
       "company": "Waste Management, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 94903525000,
+      "marketCap": 95285256000,
       "epsForecast": "$2.18"
     },
     {
@@ -791,17 +782,8 @@
       "company": "United Parcel Service, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 92903825000,
+      "marketCap": 90443080000,
       "epsForecast": "$1.63"
-    },
-    {
-      "date": "2026-10-27",
-      "ticker": "GLW",
-      "company": "Corning Incorporated",
-      "sector": "",
-      "time": "",
-      "marketCap": 91282678000,
-      "epsForecast": "$0.89"
     },
     {
       "date": "2026-10-27",
@@ -809,7 +791,7 @@
       "company": "American Tower Corporation (REIT)",
       "sector": "",
       "time": "",
-      "marketCap": 84010770000,
+      "marketCap": 85429887000,
       "epsForecast": "$2.78"
     },
     {
@@ -818,7 +800,7 @@
       "company": "Ecolab Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 83388678000,
+      "marketCap": 82653856000,
       "epsForecast": "$2.18"
     },
     {
@@ -827,17 +809,17 @@
       "company": "Sherwin-Williams Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 82098872000,
+      "marketCap": 82077131000,
       "epsForecast": "$3.65"
     },
     {
       "date": "2026-10-27",
-      "ticker": "JCI",
-      "company": "Johnson Controls International plc",
+      "ticker": "GLW",
+      "company": "Corning Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 81627161000,
-      "epsForecast": "$1.58"
+      "marketCap": 81299038000,
+      "epsForecast": "$0.89"
     },
     {
       "date": "2026-10-27",
@@ -845,7 +827,7 @@
       "company": "Royal Caribbean Cruises Ltd.",
       "sector": "",
       "time": "",
-      "marketCap": 81083810000,
+      "marketCap": 79299781000,
       "epsForecast": "$6.38"
     },
     {
@@ -854,8 +836,17 @@
       "company": "Hilton Worldwide Holdings Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 80613327000,
+      "marketCap": 79267176000,
       "epsForecast": "$2.36"
+    },
+    {
+      "date": "2026-10-27",
+      "ticker": "JCI",
+      "company": "Johnson Controls International plc",
+      "sector": "",
+      "time": "",
+      "marketCap": 78134002000,
+      "epsForecast": "$1.58"
     },
     {
       "date": "2026-10-27",
@@ -863,7 +854,7 @@
       "company": "Illinois Tool Works Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 78692139000,
+      "marketCap": 77748593000,
       "epsForecast": "$2.99"
     },
     {
@@ -872,7 +863,7 @@
       "company": "Freeport-McMoran, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 70484058000,
+      "marketCap": 65992708000,
       "epsForecast": "$0.80"
     },
     {
@@ -881,7 +872,7 @@
       "company": "NXP Semiconductors N.V.",
       "sector": "",
       "time": "",
-      "marketCap": 63456862000,
+      "marketCap": 59270259000,
       "epsForecast": "$3.78"
     },
     {
@@ -890,7 +881,7 @@
       "company": "Robinhood Markets, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 61818724000,
+      "marketCap": 55983542000,
       "epsForecast": "$0.56"
     },
     {
@@ -899,7 +890,7 @@
       "company": "PACCAR Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 54835532000,
+      "marketCap": 53808845000,
       "epsForecast": "$1.61"
     },
     {
@@ -908,7 +899,7 @@
       "company": "ONEOK, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 54546571000,
+      "marketCap": 53191102000,
       "epsForecast": "$1.46"
     },
     {
@@ -917,7 +908,7 @@
       "company": "Microsoft Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 3700472680000,
+      "marketCap": 3598139790000,
       "epsForecast": "$4.71"
     },
     {
@@ -926,7 +917,7 @@
       "company": "Alphabet Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 3352081990000,
+      "marketCap": 3261475320000,
       "epsForecast": "$2.94"
     },
     {
@@ -935,7 +926,7 @@
       "company": "Alphabet Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 3352081990000,
+      "marketCap": 3261475320000,
       "epsForecast": "$2.94"
     },
     {
@@ -944,7 +935,7 @@
       "company": "SK hynix Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 868807670000,
+      "marketCap": 754885980000,
       "epsForecast": "$5.96"
     },
     {
@@ -953,8 +944,17 @@
       "company": "GE Vernova Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 200169964000,
+      "marketCap": 185096618000,
       "epsForecast": "$4.03"
+    },
+    {
+      "date": "2026-10-28",
+      "ticker": "TMUS",
+      "company": "T-Mobile US, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 175415542000,
+      "epsForecast": "$2.86"
     },
     {
       "date": "2026-10-28",
@@ -962,7 +962,7 @@
       "company": "Amphenol Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 186700841000,
+      "marketCap": 172156895000,
       "epsForecast": "$0.73"
     },
     {
@@ -971,17 +971,8 @@
       "company": "KLA Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 184343118000,
+      "marketCap": 165306843000,
       "epsForecast": "$1.18"
-    },
-    {
-      "date": "2026-10-28",
-      "ticker": "TMUS",
-      "company": "T-Mobile US, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 172163564000,
-      "epsForecast": "$2.86"
     },
     {
       "date": "2026-10-28",
@@ -989,7 +980,7 @@
       "company": "Banco Santander, S.A.",
       "sector": "",
       "time": "",
-      "marketCap": 167052820000,
+      "marketCap": 163567911000,
       "epsForecast": "$0.26"
     },
     {
@@ -998,7 +989,7 @@
       "company": "UBS AG",
       "sector": "",
       "time": "",
-      "marketCap": 139716657000,
+      "marketCap": 134440813000,
       "epsForecast": "$0.91"
     },
     {
@@ -1007,17 +998,8 @@
       "company": "Automatic Data Processing, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 118897590000,
+      "marketCap": 119102865000,
       "epsForecast": "$2.78"
-    },
-    {
-      "date": "2026-10-28",
-      "ticker": "EQIX",
-      "company": "Equinix, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 100775059000,
-      "epsForecast": "$9.28"
     },
     {
       "date": "2026-10-28",
@@ -1025,7 +1007,7 @@
       "company": "Equinor ASA",
       "sector": "",
       "time": "",
-      "marketCap": 99235758000,
+      "marketCap": 98285658000,
       "epsForecast": "$1.38"
     },
     {
@@ -1034,17 +1016,17 @@
       "company": "GSK plc",
       "sector": "",
       "time": "",
-      "marketCap": 96711164000,
+      "marketCap": 97486553000,
       "epsForecast": "$1.40"
     },
     {
       "date": "2026-10-28",
-      "ticker": "FTNT",
-      "company": "Fortinet, Inc.",
+      "ticker": "EQIX",
+      "company": "Equinix, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 96584942000,
-      "epsForecast": "$0.77"
+      "marketCap": 95842468000,
+      "epsForecast": "$9.28"
     },
     {
       "date": "2026-10-28",
@@ -1052,8 +1034,17 @@
       "company": "Phillips 66",
       "sector": "",
       "time": "",
-      "marketCap": 94674461000,
+      "marketCap": 93356016000,
       "epsForecast": "$11.97"
+    },
+    {
+      "date": "2026-10-28",
+      "ticker": "FTNT",
+      "company": "Fortinet, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 91515445000,
+      "epsForecast": "$0.77"
     },
     {
       "date": "2026-10-28",
@@ -1061,17 +1052,8 @@
       "company": "ServiceNow, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 92247056000,
+      "marketCap": 90939179000,
       "epsForecast": "$0.56"
-    },
-    {
-      "date": "2026-10-28",
-      "ticker": "AEM",
-      "company": "Agnico Eagle Mines Limited",
-      "sector": "",
-      "time": "",
-      "marketCap": 80058409000,
-      "epsForecast": "$2.47"
     },
     {
       "date": "2026-10-28",
@@ -1079,17 +1061,17 @@
       "company": "Canadian Pacific Kansas City Limited",
       "sector": "",
       "time": "",
-      "marketCap": 79474467000,
+      "marketCap": 78002487000,
       "epsForecast": "$0.94"
     },
     {
       "date": "2026-10-28",
-      "ticker": "CVNA",
-      "company": "Carvana Co.",
+      "ticker": "AEM",
+      "company": "Agnico Eagle Mines Limited",
       "sector": "",
       "time": "",
-      "marketCap": 75021754000,
-      "epsForecast": "$0.47"
+      "marketCap": 76305646000,
+      "epsForecast": "$2.47"
     },
     {
       "date": "2026-10-28",
@@ -1097,7 +1079,7 @@
       "company": "O'Reilly Automotive, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 74277732000,
+      "marketCap": 74309812000,
       "epsForecast": "$0.92"
     },
     {
@@ -1106,17 +1088,8 @@
       "company": "FedEx Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 73688482000,
+      "marketCap": 71194264000,
       "epsForecast": "$3.24"
-    },
-    {
-      "date": "2026-10-28",
-      "ticker": "VRT",
-      "company": "Vertiv Holdings, LLC",
-      "sector": "",
-      "time": "",
-      "marketCap": 71232324000,
-      "epsForecast": "$1.82"
     },
     {
       "date": "2026-10-28",
@@ -1124,8 +1097,17 @@
       "company": "Aon plc",
       "sector": "",
       "time": "",
-      "marketCap": 70228271000,
+      "marketCap": 70663193000,
       "epsForecast": "$3.34"
+    },
+    {
+      "date": "2026-10-28",
+      "ticker": "CVNA",
+      "company": "Carvana Co.",
+      "sector": "",
+      "time": "",
+      "marketCap": 70443221000,
+      "epsForecast": "$0.47"
     },
     {
       "date": "2026-10-28",
@@ -1133,8 +1115,17 @@
       "company": "American Electric Power Company, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 68049457000,
+      "marketCap": 68142027000,
       "epsForecast": "$2.04"
+    },
+    {
+      "date": "2026-10-28",
+      "ticker": "VRT",
+      "company": "Vertiv Holdings, LLC",
+      "sector": "",
+      "time": "",
+      "marketCap": 64012444000,
+      "epsForecast": "$1.82"
     },
     {
       "date": "2026-10-28",
@@ -1142,7 +1133,7 @@
       "company": "Boston Scientific Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 62312854000,
+      "marketCap": 60848886000,
       "epsForecast": "$0.73"
     },
     {
@@ -1151,7 +1142,7 @@
       "company": "Deutsche Bank AG",
       "sector": "",
       "time": "",
-      "marketCap": 61569118000,
+      "marketCap": 59157598000,
       "epsForecast": "$0.82"
     },
     {
@@ -1160,7 +1151,7 @@
       "company": "TE Connectivity plc",
       "sector": "",
       "time": "",
-      "marketCap": 60552872000,
+      "marketCap": 57330418000,
       "epsForecast": "$3.08"
     },
     {
@@ -1169,7 +1160,7 @@
       "company": "Garmin Ltd.",
       "sector": "",
       "time": "",
-      "marketCap": 52370727000,
+      "marketCap": 51650048000,
       "epsForecast": "$2.38"
     },
     {
@@ -1178,7 +1169,7 @@
       "company": "eBay Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 51459580000,
+      "marketCap": 50744009000,
       "epsForecast": "$1.11"
     },
     {
@@ -1187,7 +1178,7 @@
       "company": "Amazon.com, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 2782977330000,
+      "marketCap": 2668898810000,
       "epsForecast": "$2.01"
     },
     {
@@ -1196,7 +1187,7 @@
       "company": "Eli Lilly and Company",
       "sector": "",
       "time": "",
-      "marketCap": 1271059450000,
+      "marketCap": 1267287060000,
       "epsForecast": "$5.38"
     },
     {
@@ -1205,7 +1196,7 @@
       "company": "Mastercard Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 545791836000,
+      "marketCap": 544999080000,
       "epsForecast": "$5.14"
     },
     {
@@ -1214,7 +1205,7 @@
       "company": "Merck & Company, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 327409271000,
+      "marketCap": 329652666000,
       "epsForecast": "$2.12"
     },
     {
@@ -1223,7 +1214,7 @@
       "company": "Intel Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 296151810000,
+      "marketCap": 272553198000,
       "epsForecast": "$0.28"
     },
     {
@@ -1232,7 +1223,7 @@
       "company": "Shell PLC",
       "sector": "",
       "time": "",
-      "marketCap": 258752348000,
+      "marketCap": 258632712000,
       "epsForecast": "$3.54"
     },
     {
@@ -1241,7 +1232,7 @@
       "company": "Caterpillar, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 245897380000,
+      "marketCap": 233578938000,
       "epsForecast": "$7.12"
     },
     {
@@ -1250,7 +1241,7 @@
       "company": "Linde plc",
       "sector": "",
       "time": "",
-      "marketCap": 234229137000,
+      "marketCap": 230841090000,
       "epsForecast": "$4.52"
     },
     {
@@ -1259,7 +1250,7 @@
       "company": "Gilead Sciences, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 206553596000,
+      "marketCap": 206429553000,
       "epsForecast": "$2.17"
     },
     {
@@ -1268,7 +1259,7 @@
       "company": "TotalEnergies SE",
       "sector": "",
       "time": "",
-      "marketCap": 189657989000,
+      "marketCap": 187247018000,
       "epsForecast": "$4.11"
     },
     {
@@ -1277,7 +1268,7 @@
       "company": "Anheuser-Busch Inbev SA",
       "sector": "",
       "time": "",
-      "marketCap": 159466684000,
+      "marketCap": 156252094000,
       "epsForecast": "$1.14"
     },
     {
@@ -1286,7 +1277,7 @@
       "company": "Banco Bilbao Vizcaya Argentaria S.A.",
       "sector": "",
       "time": "",
-      "marketCap": 138487906000,
+      "marketCap": 133159264000,
       "epsForecast": "$0.62"
     },
     {
@@ -1295,7 +1286,7 @@
       "company": "Altria Group",
       "sector": "",
       "time": "",
-      "marketCap": 124225470000,
+      "marketCap": 124541518000,
       "epsForecast": "$1.51"
     },
     {
@@ -1304,7 +1295,7 @@
       "company": "Bristol-Myers Squibb Company",
       "sector": "",
       "time": "",
-      "marketCap": 119251968000,
+      "marketCap": 120192246000,
       "epsForecast": "$1.21"
     },
     {
@@ -1313,7 +1304,7 @@
       "company": "Stryker Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 119186743000,
+      "marketCap": 118014214000,
       "epsForecast": "$3.56"
     },
     {
@@ -1322,7 +1313,7 @@
       "company": "Starbucks Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 119106249000,
+      "marketCap": 117578514000,
       "epsForecast": "$0.73"
     },
     {
@@ -1331,7 +1322,7 @@
       "company": "Sandisk Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 107451236000,
+      "marketCap": 101475189000,
       "epsForecast": "$46.19"
     },
     {
@@ -1340,7 +1331,7 @@
       "company": "Intercontinental Exchange Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 95497724000,
+      "marketCap": 95005934000,
       "epsForecast": "$1.97"
     },
     {
@@ -1349,17 +1340,8 @@
       "company": "ING Group, N.V.",
       "sector": "",
       "time": "",
-      "marketCap": 89017762000,
+      "marketCap": 85534835000,
       "epsForecast": "$0.79"
-    },
-    {
-      "date": "2026-10-29",
-      "ticker": "PWR",
-      "company": "Quanta Services, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 88512274000,
-      "epsForecast": "$4.68"
     },
     {
       "date": "2026-10-29",
@@ -1367,17 +1349,17 @@
       "company": "Trane Technologies plc",
       "sector": "",
       "time": "",
-      "marketCap": 87958716000,
+      "marketCap": 84557079000,
       "epsForecast": "$4.74"
     },
     {
       "date": "2026-10-29",
-      "ticker": "HWM",
-      "company": "Howmet Aerospace Inc.",
+      "ticker": "PWR",
+      "company": "Quanta Services, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 86757589000,
-      "epsForecast": "$1.37"
+      "marketCap": 84233044000,
+      "epsForecast": "$4.68"
     },
     {
       "date": "2026-10-29",
@@ -1385,8 +1367,17 @@
       "company": "Mondelez International, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 83152921000,
+      "marketCap": 83899769000,
       "epsForecast": "$0.72"
+    },
+    {
+      "date": "2026-10-29",
+      "ticker": "HWM",
+      "company": "Howmet Aerospace Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 83174670000,
+      "epsForecast": "$1.37"
     },
     {
       "date": "2026-10-29",
@@ -1394,17 +1385,8 @@
       "company": "Enterprise Products Partners L.P.",
       "sector": "",
       "time": "",
-      "marketCap": 77982835000,
+      "marketCap": 77271155000,
       "epsForecast": "$0.74"
-    },
-    {
-      "date": "2026-10-29",
-      "ticker": "LYG",
-      "company": "Lloyds Banking Group Plc",
-      "sector": "",
-      "time": "",
-      "marketCap": 75137679000,
-      "epsForecast": "$0.14"
     },
     {
       "date": "2026-10-29",
@@ -1412,8 +1394,17 @@
       "company": "Republic Services, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 75090625000,
+      "marketCap": 75121091000,
       "epsForecast": "$1.92"
+    },
+    {
+      "date": "2026-10-29",
+      "ticker": "LYG",
+      "company": "Lloyds Banking Group Plc",
+      "sector": "",
+      "time": "",
+      "marketCap": 73459139000,
+      "epsForecast": "$0.14"
     },
     {
       "date": "2026-10-29",
@@ -1421,26 +1412,8 @@
       "company": "Arthur J. Gallagher & Co.",
       "sector": "",
       "time": "",
-      "marketCap": 71181771000,
+      "marketCap": 71602266000,
       "epsForecast": "$3.01"
-    },
-    {
-      "date": "2026-10-29",
-      "ticker": "DASH",
-      "company": "DoorDash, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 68504961000,
-      "epsForecast": "$0.82"
-    },
-    {
-      "date": "2026-10-29",
-      "ticker": "ASX",
-      "company": "ASE Technology Holding Co., Ltd.",
-      "sector": "",
-      "time": "",
-      "marketCap": 67898143000,
-      "epsForecast": "$0.34"
     },
     {
       "date": "2026-10-29",
@@ -1448,8 +1421,17 @@
       "company": "Takeda Pharmaceutical Company Limited",
       "sector": "",
       "time": "",
-      "marketCap": 67652272000,
+      "marketCap": 68789813000,
       "epsForecast": "$0.31"
+    },
+    {
+      "date": "2026-10-29",
+      "ticker": "DASH",
+      "company": "DoorDash, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 66529989000,
+      "epsForecast": "$0.82"
     },
     {
       "date": "2026-10-29",
@@ -1457,17 +1439,8 @@
       "company": "Digital Realty Trust, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 65836257000,
+      "marketCap": 61462811000,
       "epsForecast": "$1.97"
-    },
-    {
-      "date": "2026-10-29",
-      "ticker": "MPWR",
-      "company": "Monolithic Power Systems, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 63196500000,
-      "epsForecast": "$6.80"
     },
     {
       "date": "2026-10-29",
@@ -1475,7 +1448,7 @@
       "company": "Cheniere Energy, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 60315709000,
+      "marketCap": 60207481000,
       "epsForecast": "$4.20"
     },
     {
@@ -1484,8 +1457,26 @@
       "company": "CRH PLC",
       "sector": "",
       "time": "",
-      "marketCap": 60229992000,
+      "marketCap": 58573566000,
       "epsForecast": "$2.14"
+    },
+    {
+      "date": "2026-10-29",
+      "ticker": "ASX",
+      "company": "ASE Technology Holding Co., Ltd.",
+      "sector": "",
+      "time": "",
+      "marketCap": 58500633000,
+      "epsForecast": "$0.34"
+    },
+    {
+      "date": "2026-10-29",
+      "ticker": "MPWR",
+      "company": "Monolithic Power Systems, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 55695495000,
+      "epsForecast": "$6.80"
     },
     {
       "date": "2026-10-29",
@@ -1493,7 +1484,7 @@
       "company": "Xcel Energy Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 51003343000,
+      "marketCap": 50900644000,
       "epsForecast": "$1.39"
     },
     {
@@ -1502,7 +1493,7 @@
       "company": "ExxonMobil Holdings Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 648310820000,
+      "marketCap": 652634820000,
       "epsForecast": "$3.90"
     },
     {
@@ -1511,7 +1502,7 @@
       "company": "AbbVie Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 501189935000,
+      "marketCap": 505891783000,
       "epsForecast": "$3.74"
     },
     {
@@ -1520,7 +1511,7 @@
       "company": "Chevron Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 405859566000,
+      "marketCap": 409534923000,
       "epsForecast": "$4.78"
     },
     {
@@ -1529,17 +1520,8 @@
       "company": "AstraZeneca PLC",
       "sector": "",
       "time": "",
-      "marketCap": 269955793000,
+      "marketCap": 272080962000,
       "epsForecast": "$2.60"
-    },
-    {
-      "date": "2026-10-30",
-      "ticker": "BP",
-      "company": "BP p.l.c.",
-      "sector": "",
-      "time": "",
-      "marketCap": 113146741000,
-      "epsForecast": "$2.66"
     },
     {
       "date": "2026-10-30",
@@ -1547,8 +1529,17 @@
       "company": "Sanofi",
       "sector": "",
       "time": "",
-      "marketCap": 112333627000,
+      "marketCap": 113455497000,
       "epsForecast": "$1.63"
+    },
+    {
+      "date": "2026-10-30",
+      "ticker": "BP",
+      "company": "BP p.l.c.",
+      "sector": "",
+      "time": "",
+      "marketCap": 112950624000,
+      "epsForecast": "$2.66"
     },
     {
       "date": "2026-10-30",
@@ -1556,7 +1547,7 @@
       "company": "Regeneron Pharmaceuticals, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 95517549000,
+      "marketCap": 95243411000,
       "epsForecast": "$13.76"
     },
     {
@@ -1565,7 +1556,7 @@
       "company": "General Dynamics Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 93859504000,
+      "marketCap": 92281397000,
       "epsForecast": "$4.14"
     },
     {
@@ -1574,7 +1565,7 @@
       "company": "Colgate-Palmolive Company",
       "sector": "",
       "time": "",
-      "marketCap": 77011902000,
+      "marketCap": 78466605000,
       "epsForecast": "$0.92"
     },
     {
@@ -1583,7 +1574,7 @@
       "company": "Canadian National Railway Company",
       "sector": "",
       "time": "",
-      "marketCap": 74688938000,
+      "marketCap": 73267421000,
       "epsForecast": "$1.49"
     },
     {
@@ -1592,7 +1583,7 @@
       "company": "NatWest Group plc",
       "sector": "",
       "time": "",
-      "marketCap": 61396767000,
+      "marketCap": 59808694000,
       "epsForecast": "$0.51"
     },
     {
@@ -1601,7 +1592,7 @@
       "company": "Dominion Energy, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 58623078000,
+      "marketCap": 58297639000,
       "epsForecast": "$1.20"
     },
     {
@@ -1610,7 +1601,7 @@
       "company": "Imperial Oil Limited",
       "sector": "",
       "time": "",
-      "marketCap": 55025238000,
+      "marketCap": 54819791000,
       "epsForecast": "$3.43"
     },
     {
@@ -1619,7 +1610,7 @@
       "company": "Apple Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 5074783300000,
+      "marketCap": 4978144400000,
       "epsForecast": "$1.98"
     },
     {
@@ -1628,7 +1619,7 @@
       "company": "Palantir Technologies Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 370291573000,
+      "marketCap": 345738805000,
       "epsForecast": "$0.32"
     },
     {
@@ -1637,7 +1628,7 @@
       "company": "Williams Companies, Inc. (The)",
       "sector": "",
       "time": "",
-      "marketCap": 167953875000,
+      "marketCap": 163331523000,
       "epsForecast": "$0.55"
     },
     {
@@ -1646,7 +1637,7 @@
       "company": "Vertex Pharmaceuticals Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 132006928000,
+      "marketCap": 130576974000,
       "epsForecast": "$4.36"
     },
     {
@@ -1655,7 +1646,7 @@
       "company": "Marriott International",
       "sector": "",
       "time": "",
-      "marketCap": 106617119000,
+      "marketCap": 104711586000,
       "epsForecast": "$2.86"
     },
     {
@@ -1664,7 +1655,7 @@
       "company": "Realty Income Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 54834491000,
+      "marketCap": 55186358000,
       "epsForecast": "$1.11"
     },
     {
@@ -1673,17 +1664,8 @@
       "company": "IDEXX Laboratories, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 54334947000,
+      "marketCap": 53276062000,
       "epsForecast": "$3.71"
-    },
-    {
-      "date": "2026-11-02",
-      "ticker": "ETR",
-      "company": "Entergy Corporation",
-      "sector": "",
-      "time": "",
-      "marketCap": 50735686000,
-      "epsForecast": "$1.71"
     },
     {
       "date": "2026-11-03",
@@ -1691,17 +1673,8 @@
       "company": "Advanced Micro Devices, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 809641510000,
+      "marketCap": 702393290000,
       "epsForecast": "$1.68"
-    },
-    {
-      "date": "2026-11-03",
-      "ticker": "ANET",
-      "company": "Arista Networks, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 239528444000,
-      "epsForecast": "$0.99"
     },
     {
       "date": "2026-11-03",
@@ -1709,8 +1682,17 @@
       "company": "Amgen Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 237362774000,
+      "marketCap": 235642683000,
       "epsForecast": "$5.74"
+    },
+    {
+      "date": "2026-11-03",
+      "ticker": "ANET",
+      "company": "Arista Networks, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 211771507000,
+      "epsForecast": "$0.99"
     },
     {
       "date": "2026-11-03",
@@ -1718,7 +1700,7 @@
       "company": "Shopify Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 169815540000,
+      "marketCap": 158711382000,
       "epsForecast": "$0.33"
     },
     {
@@ -1727,7 +1709,7 @@
       "company": "Pfizer, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 156973974000,
+      "marketCap": 156175991000,
       "epsForecast": "$0.72"
     },
     {
@@ -1736,7 +1718,7 @@
       "company": "Eaton Corporation, PLC",
       "sector": "",
       "time": "",
-      "marketCap": 128426443000,
+      "marketCap": 120951702000,
       "epsForecast": "$3.54"
     },
     {
@@ -1745,7 +1727,7 @@
       "company": "Booking Holdings Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 109562069000,
+      "marketCap": 107769750000,
       "epsForecast": "$4.48"
     },
     {
@@ -1754,7 +1736,7 @@
       "company": "Marathon Petroleum Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 100180820000,
+      "marketCap": 99979330000,
       "epsForecast": "$25.74"
     },
     {
@@ -1763,7 +1745,7 @@
       "company": "Ferrari N.V.",
       "sector": "",
       "time": "",
-      "marketCap": 94850474000,
+      "marketCap": 91816215000,
       "epsForecast": "$2.66"
     },
     {
@@ -1772,7 +1754,7 @@
       "company": "Suncor Energy  Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 74922369000,
+      "marketCap": 73444180000,
       "epsForecast": "$2.35"
     },
     {
@@ -1781,7 +1763,7 @@
       "company": "Itau Unibanco Banco Holding SA",
       "sector": "",
       "time": "",
-      "marketCap": 73769755000,
+      "marketCap": 71895187000,
       "epsForecast": "$0.22"
     },
     {
@@ -1790,7 +1772,7 @@
       "company": "Apollo Global Management, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 68661404000,
+      "marketCap": 65632485000,
       "epsForecast": "$2.04"
     },
     {
@@ -1799,7 +1781,7 @@
       "company": "MPLX LP",
       "sector": "",
       "time": "",
-      "marketCap": 57225896000,
+      "marketCap": 56496517000,
       "epsForecast": "$1.11"
     },
     {
@@ -1808,7 +1790,7 @@
       "company": "AMTEK, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 53006856000,
+      "marketCap": 51114983000,
       "epsForecast": "$2.12"
     },
     {
@@ -1817,7 +1799,7 @@
       "company": "McDonald's Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 192220479000,
+      "marketCap": 195064791000,
       "epsForecast": "$3.36"
     },
     {
@@ -1826,7 +1808,7 @@
       "company": "Arm Holdings plc",
       "sector": "",
       "time": "",
-      "marketCap": 188518662000,
+      "marketCap": 187986641000,
       "epsForecast": "$0.22"
     },
     {
@@ -1835,7 +1817,7 @@
       "company": "QUALCOMM Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 173350699000,
+      "marketCap": 176956604000,
       "epsForecast": "$1.46"
     },
     {
@@ -1844,7 +1826,7 @@
       "company": "Novo Nordisk A/S",
       "sector": "",
       "time": "",
-      "marketCap": 172113658000,
+      "marketCap": 173309198000,
       "epsForecast": "$0.81"
     },
     {
@@ -1853,7 +1835,7 @@
       "company": "Uber Technologies, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 133948514000,
+      "marketCap": 130824413000,
       "epsForecast": "$0.94"
     },
     {
@@ -1862,7 +1844,7 @@
       "company": "Applovin Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 125577691000,
+      "marketCap": 123887944000,
       "epsForecast": "$3.94"
     },
     {
@@ -1871,7 +1853,7 @@
       "company": "McKesson Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 122633454000,
+      "marketCap": 121047073000,
       "epsForecast": "$10.69"
     },
     {
@@ -1880,17 +1862,8 @@
       "company": "CVS Health Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 102409118000,
+      "marketCap": 101910118000,
       "epsForecast": "$1.62"
-    },
-    {
-      "date": "2026-11-04",
-      "ticker": "EMR",
-      "company": "Emerson Electric Company",
-      "sector": "",
-      "time": "",
-      "marketCap": 86459359000,
-      "epsForecast": "$1.85"
     },
     {
       "date": "2026-11-04",
@@ -1898,17 +1871,17 @@
       "company": "Motorola Solutions, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 86291087000,
+      "marketCap": 87605494000,
       "epsForecast": "$3.99"
     },
     {
       "date": "2026-11-04",
-      "ticker": "MFC",
-      "company": "Manulife Financial Corp",
+      "ticker": "EMR",
+      "company": "Emerson Electric Company",
       "sector": "",
       "time": "",
-      "marketCap": 69751243000,
-      "epsForecast": "$0.83"
+      "marketCap": 86848864000,
+      "epsForecast": "$1.85"
     },
     {
       "date": "2026-11-04",
@@ -1916,17 +1889,17 @@
       "company": "MercadoLibre, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 68719010000,
+      "marketCap": 72247001000,
       "epsForecast": "$9.41"
     },
     {
       "date": "2026-11-04",
-      "ticker": "GWW",
-      "company": "W.W. Grainger, Inc.",
+      "ticker": "MFC",
+      "company": "Manulife Financial Corp",
       "sector": "",
       "time": "",
-      "marketCap": 66657731000,
-      "epsForecast": "$11.64"
+      "marketCap": 68996235000,
+      "epsForecast": "$0.83"
     },
     {
       "date": "2026-11-04",
@@ -1934,8 +1907,17 @@
       "company": "Allstate Corporation (The)",
       "sector": "",
       "time": "",
-      "marketCap": 66012103000,
+      "marketCap": 65643401000,
       "epsForecast": "$7.03"
+    },
+    {
+      "date": "2026-11-04",
+      "ticker": "GWW",
+      "company": "W.W. Grainger, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 65077285000,
+      "epsForecast": "$11.64"
     },
     {
       "date": "2026-11-04",
@@ -1943,17 +1925,8 @@
       "company": "Cencora, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 65119769000,
+      "marketCap": 64507216000,
       "epsForecast": "$4.56"
-    },
-    {
-      "date": "2026-11-04",
-      "ticker": "AFL",
-      "company": "Aflac Incorporated",
-      "sector": "",
-      "time": "",
-      "marketCap": 61707178000,
-      "epsForecast": "$1.80"
     },
     {
       "date": "2026-11-04",
@@ -1961,8 +1934,17 @@
       "company": "MetLife, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 61335953000,
+      "marketCap": 62039810000,
       "epsForecast": "$2.71"
+    },
+    {
+      "date": "2026-11-04",
+      "ticker": "AFL",
+      "company": "Aflac Incorporated",
+      "sector": "",
+      "time": "",
+      "marketCap": 61825884000,
+      "epsForecast": "$1.80"
     },
     {
       "date": "2026-11-04",
@@ -1970,7 +1952,7 @@
       "company": "Datadog, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 60099142000,
+      "marketCap": 61023412000,
       "epsForecast": "$0.18"
     },
     {
@@ -1979,8 +1961,17 @@
       "company": "Edwards Lifesciences Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 59731001000,
+      "marketCap": 60409500000,
       "epsForecast": "$0.73"
+    },
+    {
+      "date": "2026-11-04",
+      "ticker": "MDLN",
+      "company": "Medline Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 50679333000,
+      "epsForecast": "$0.32"
     },
     {
       "date": "2026-11-05",
@@ -1988,17 +1979,8 @@
       "company": "Toyota Motor Corp Ltd Ord",
       "sector": "",
       "time": "",
-      "marketCap": 274976866000,
+      "marketCap": 270441054000,
       "epsForecast": ""
-    },
-    {
-      "date": "2026-11-05",
-      "ticker": "SONY",
-      "company": "Sony Group Corporation",
-      "sector": "",
-      "time": "",
-      "marketCap": 160372621000,
-      "epsForecast": "$0.38"
     },
     {
       "date": "2026-11-05",
@@ -2006,8 +1988,17 @@
       "company": "ConocoPhillips",
       "sector": "",
       "time": "",
-      "marketCap": 159603409000,
+      "marketCap": 160939442000,
       "epsForecast": "$3.06"
+    },
+    {
+      "date": "2026-11-05",
+      "ticker": "SONY",
+      "company": "Sony Group Corporation",
+      "sector": "",
+      "time": "",
+      "marketCap": 160903266000,
+      "epsForecast": "$0.38"
     },
     {
       "date": "2026-11-05",
@@ -2015,17 +2006,8 @@
       "company": "Parker-Hannifin Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 114260091000,
+      "marketCap": 109938754000,
       "epsForecast": "$8.23"
-    },
-    {
-      "date": "2026-11-05",
-      "ticker": "NET",
-      "company": "Cloudflare, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 108836561000,
-      "epsForecast": "$0.02"
     },
     {
       "date": "2026-11-05",
@@ -2033,17 +2015,8 @@
       "company": "Southern Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 108613911000,
+      "marketCap": 108427633000,
       "epsForecast": "$1.71"
-    },
-    {
-      "date": "2026-11-05",
-      "ticker": "ABNB",
-      "company": "Airbnb, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 101521416000,
-      "epsForecast": "$2.86"
     },
     {
       "date": "2026-11-05",
@@ -2051,8 +2024,26 @@
       "company": "Duke Energy Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 100473209000,
+      "marketCap": 101190541000,
       "epsForecast": "$1.87"
+    },
+    {
+      "date": "2026-11-05",
+      "ticker": "ABNB",
+      "company": "Airbnb, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 100093690000,
+      "epsForecast": "$2.86"
+    },
+    {
+      "date": "2026-11-05",
+      "ticker": "NET",
+      "company": "Cloudflare, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 98543534000,
+      "epsForecast": "$0.02"
     },
     {
       "date": "2026-11-05",
@@ -2060,7 +2051,7 @@
       "company": "Canadian Natural Resources Limited",
       "sector": "",
       "time": "",
-      "marketCap": 91402379000,
+      "marketCap": 90826678000,
       "epsForecast": "$1.05"
     },
     {
@@ -2069,7 +2060,7 @@
       "company": "Monster Beverage Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 86013075000,
+      "marketCap": 85523694000,
       "epsForecast": "$0.30"
     },
     {
@@ -2078,7 +2069,7 @@
       "company": "EOG Resources, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 77508207000,
+      "marketCap": 77046759000,
       "epsForecast": "$4.45"
     },
     {
@@ -2087,7 +2078,7 @@
       "company": "Simon Property Group, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 72626741000,
+      "marketCap": 72346190000,
       "epsForecast": "$3.32"
     },
     {
@@ -2096,7 +2087,7 @@
       "company": "The Cigna Group",
       "sector": "",
       "time": "",
-      "marketCap": 71946740000,
+      "marketCap": 71382843000,
       "epsForecast": "$7.46"
     },
     {
@@ -2105,7 +2096,7 @@
       "company": "Air Products and Chemicals, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 67658543000,
+      "marketCap": 66159985000,
       "epsForecast": "$3.60"
     },
     {
@@ -2114,7 +2105,7 @@
       "company": "Kimberly-Clark Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 64589328000,
+      "marketCap": 65282781000,
       "epsForecast": "$1.69"
     },
     {
@@ -2123,7 +2114,7 @@
       "company": "Cardinal Health, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 62947758000,
+      "marketCap": 63056392000,
       "epsForecast": "$2.92"
     },
     {
@@ -2132,7 +2123,7 @@
       "company": "TC Energy Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 62815654000,
+      "marketCap": 62055035000,
       "epsForecast": "$0.64"
     },
     {
@@ -2141,7 +2132,7 @@
       "company": "Targa Resources, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 61238006000,
+      "marketCap": 59710382000,
       "epsForecast": "$2.81"
     },
     {
@@ -2150,7 +2141,7 @@
       "company": "Becton, Dickinson and Company",
       "sector": "",
       "time": "",
-      "marketCap": 57931223000,
+      "marketCap": 57958461000,
       "epsForecast": "$4.06"
     },
     {
@@ -2159,17 +2150,8 @@
       "company": "Cummins Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 57735836000,
+      "marketCap": 55326007000,
       "epsForecast": "$8.38"
-    },
-    {
-      "date": "2026-11-05",
-      "ticker": "WPM",
-      "company": "Wheaton Precious Metals Corp.",
-      "sector": "",
-      "time": "",
-      "marketCap": 52795552000,
-      "epsForecast": "$0.91"
     },
     {
       "date": "2026-11-06",
@@ -2177,7 +2159,7 @@
       "company": "Enbridge Inc",
       "sector": "",
       "time": "",
-      "marketCap": 102532440000,
+      "marketCap": 101763375000,
       "epsForecast": "$0.36"
     },
     {
@@ -2186,7 +2168,7 @@
       "company": "Moderna, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 80653099000,
+      "marketCap": 78901092000,
       "epsForecast": "($1.10)"
     },
     {
@@ -2195,7 +2177,7 @@
       "company": "Brookfield Asset Management",
       "sector": "",
       "time": "",
-      "marketCap": 80266224000,
+      "marketCap": 78163018000,
       "epsForecast": "$0.44"
     },
     {
@@ -2204,7 +2186,7 @@
       "company": "Constellation Energy Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 88615895000,
+      "marketCap": 88506892000,
       "epsForecast": "$3.90"
     },
     {
@@ -2213,7 +2195,7 @@
       "company": "KKR & Co. Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 82192818000,
+      "marketCap": 82629960000,
       "epsForecast": "$1.41"
     },
     {
@@ -2222,7 +2204,7 @@
       "company": "Barrick Mining Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 54393151000,
+      "marketCap": 55279174000,
       "epsForecast": "$0.74"
     },
     {
@@ -2231,7 +2213,7 @@
       "company": "Occidental Petroleum Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 53804335000,
+      "marketCap": 52694454000,
       "epsForecast": "$1.43"
     },
     {
@@ -2240,7 +2222,7 @@
       "company": "Petroleo Brasileiro S.A.- Petrobras",
       "sector": "",
       "time": "",
-      "marketCap": 104978727000,
+      "marketCap": 101885436000,
       "epsForecast": "$1.38"
     },
     {
@@ -2249,7 +2231,7 @@
       "company": "Petroleo Brasileiro S.A.- Petrobras",
       "sector": "",
       "time": "",
-      "marketCap": 104978727000,
+      "marketCap": 101885436000,
       "epsForecast": ""
     },
     {
@@ -2258,7 +2240,7 @@
       "company": "Transdigm Group Incorporated",
       "sector": "",
       "time": "",
-      "marketCap": 63250514000,
+      "marketCap": 62250426000,
       "epsForecast": "$11.43"
     },
     {
@@ -2267,7 +2249,7 @@
       "company": "Cisco Systems, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 373349843000,
+      "marketCap": 357343494000,
       "epsForecast": "$1.15"
     },
     {
@@ -2276,7 +2258,7 @@
       "company": "Applied Materials, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 268973982000,
+      "marketCap": 240166388000,
       "epsForecast": "$4.06"
     },
     {
@@ -2285,7 +2267,7 @@
       "company": "Brookfield Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 86786474000,
+      "marketCap": 83873759000,
       "epsForecast": "$0.72"
     },
     {
@@ -2294,7 +2276,7 @@
       "company": "Nu Holdings Ltd.",
       "sector": "",
       "time": "",
-      "marketCap": 57394061000,
+      "marketCap": 54723441000,
       "epsForecast": "$0.22"
     },
     {
@@ -2303,7 +2285,7 @@
       "company": "Mitsubishi UFJ Financial Group Inc",
       "sector": "",
       "time": "",
-      "marketCap": 221628154000,
+      "marketCap": 210687738000,
       "epsForecast": "$0.45"
     },
     {
@@ -2312,7 +2294,7 @@
       "company": "Sumitomo Mitsui Financial Group Inc",
       "sector": "",
       "time": "",
-      "marketCap": 143529066000,
+      "marketCap": 137210978000,
       "epsForecast": "$0.24"
     },
     {
@@ -2321,7 +2303,7 @@
       "company": "Mizuho Financial Group, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 116898390000,
+      "marketCap": 111047246000,
       "epsForecast": ""
     },
     {
@@ -2330,7 +2312,7 @@
       "company": "NVIDIA Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 3518117970000,
+      "marketCap": 3977704900000,
       "epsForecast": "$2.47"
     },
     {
@@ -2339,7 +2321,7 @@
       "company": "Home Depot, Inc. (The)",
       "sector": "",
       "time": "",
-      "marketCap": 335902147000,
+      "marketCap": 345316753000,
       "epsForecast": "$3.86"
     },
     {
@@ -2348,7 +2330,7 @@
       "company": "Walt Disney Company (The)",
       "sector": "",
       "time": "",
-      "marketCap": 205390561000,
+      "marketCap": 205424722000,
       "epsForecast": "$1.67"
     },
     {
@@ -2357,7 +2339,7 @@
       "company": "Palo Alto Networks, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 296055439000,
+      "marketCap": 290166014000,
       "epsForecast": "$0.52"
     },
     {
@@ -2366,7 +2348,7 @@
       "company": "TJX Companies, Inc. (The)",
       "sector": "",
       "time": "",
-      "marketCap": 153347391000,
+      "marketCap": 153171395000,
       "epsForecast": "$1.33"
     },
     {
@@ -2375,7 +2357,7 @@
       "company": "Lowe's Companies, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 122949378000,
+      "marketCap": 126876754000,
       "epsForecast": "$2.86"
     },
     {
@@ -2384,7 +2366,7 @@
       "company": "Target Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 76076532000,
+      "marketCap": 76408168000,
       "epsForecast": "$2.05"
     },
     {
@@ -2393,7 +2375,7 @@
       "company": "Walmart Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 999969390000,
+      "marketCap": 1028054840000,
       "epsForecast": "$0.64"
     },
     {
@@ -2402,7 +2384,7 @@
       "company": "Alibaba Group Holding Limited",
       "sector": "",
       "time": "",
-      "marketCap": 201817309000,
+      "marketCap": 208430694000,
       "epsForecast": "$1.56"
     },
     {
@@ -2411,7 +2393,7 @@
       "company": "PDD Holdings Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 122412098000,
+      "marketCap": 124034769000,
       "epsForecast": "$2.61"
     },
     {
@@ -2420,7 +2402,7 @@
       "company": "Intuit Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 82848506000,
+      "marketCap": 72725570000,
       "epsForecast": "$2.47"
     },
     {
@@ -2429,7 +2411,7 @@
       "company": "Ross Stores, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 70241354000,
+      "marketCap": 69334106000,
       "epsForecast": "$1.85"
     },
     {
@@ -2438,16 +2420,25 @@
       "company": "NetEase, Inc.",
       "sector": "",
       "time": "",
-      "marketCap": 66965164000,
+      "marketCap": 65854820000,
       "epsForecast": "$2.37"
+    },
+    {
+      "date": "2026-11-23",
+      "ticker": "CRWD",
+      "company": "CrowdStrike Holdings, Inc.",
+      "sector": "",
+      "time": "",
+      "marketCap": 234931618000,
+      "epsForecast": "$0"
     },
     {
       "date": "2026-11-23",
       "ticker": "HPE",
       "company": "Hewlett Packard Enterprise Company",
       "sector": "",
-      "time": "AMC",
-      "marketCap": 60386374000,
+      "time": "",
+      "marketCap": 54306583000,
       "epsForecast": "$1.18"
     },
     {
@@ -2456,17 +2447,8 @@
       "company": "Dell Technologies Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 198716916000,
+      "marketCap": 176768664000,
       "epsForecast": "$6.55"
-    },
-    {
-      "date": "2026-11-24",
-      "ticker": "ADI",
-      "company": "Analog Devices, Inc.",
-      "sector": "",
-      "time": "BMO",
-      "marketCap": 182894395000,
-      "epsForecast": "$3.89"
     },
     {
       "date": "2026-11-24",
@@ -2474,8 +2456,17 @@
       "company": "BHP Group Limited",
       "sector": "",
       "time": "",
-      "marketCap": 176429023000,
+      "marketCap": 173621117000,
       "epsForecast": ""
+    },
+    {
+      "date": "2026-11-24",
+      "ticker": "ADI",
+      "company": "Analog Devices, Inc.",
+      "sector": "",
+      "time": "BMO",
+      "marketCap": 167620887000,
+      "epsForecast": "$3.89"
     },
     {
       "date": "2026-11-24",
@@ -2483,7 +2474,7 @@
       "company": "Medtronic plc",
       "sector": "",
       "time": "BMO",
-      "marketCap": 128694067000,
+      "marketCap": 127837045000,
       "epsForecast": "$1.34"
     },
     {
@@ -2492,7 +2483,7 @@
       "company": "Autodesk, Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 50881049000,
+      "marketCap": 51096322000,
       "epsForecast": "$2.27"
     },
     {
@@ -2501,17 +2492,8 @@
       "company": "Deere & Company",
       "sector": "",
       "time": "BMO",
-      "marketCap": 168486224000,
+      "marketCap": 164269277000,
       "epsForecast": "$4.07"
-    },
-    {
-      "date": "2026-12-01",
-      "ticker": "CRWD",
-      "company": "CrowdStrike Holdings, Inc.",
-      "sector": "",
-      "time": "AMC",
-      "marketCap": 249287180000,
-      "epsForecast": "$0"
     },
     {
       "date": "2026-12-01",
@@ -2519,7 +2501,7 @@
       "company": "Marvell Technology, Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 121424339000,
+      "marketCap": 107227333000,
       "epsForecast": "$0.79"
     },
     {
@@ -2528,7 +2510,7 @@
       "company": "Salesforce, Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 150864134000,
+      "marketCap": 148650263000,
       "epsForecast": "$2.41"
     },
     {
@@ -2537,7 +2519,7 @@
       "company": "Bank Of Montreal",
       "sector": "",
       "time": "BMO",
-      "marketCap": 111959794000,
+      "marketCap": 108701680000,
       "epsForecast": "$2.69"
     },
     {
@@ -2546,7 +2528,7 @@
       "company": "Bank of Nova Scotia (The)",
       "sector": "",
       "time": "BMO",
-      "marketCap": 105565037000,
+      "marketCap": 102467297000,
       "epsForecast": "$1.55"
     },
     {
@@ -2555,7 +2537,7 @@
       "company": "Snowflake Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 94758552000,
+      "marketCap": 89900499000,
       "epsForecast": "($0.32)"
     },
     {
@@ -2564,7 +2546,7 @@
       "company": "Royal Bank Of Canada",
       "sector": "",
       "time": "BMO",
-      "marketCap": 260042310000,
+      "marketCap": 253691576000,
       "epsForecast": "$2.93"
     },
     {
@@ -2573,7 +2555,7 @@
       "company": "Toronto Dominion Bank (The)",
       "sector": "",
       "time": "BMO",
-      "marketCap": 188152447000,
+      "marketCap": 184360042000,
       "epsForecast": "$1.77"
     },
     {
@@ -2582,7 +2564,7 @@
       "company": "Canadian Imperial Bank of Commerce",
       "sector": "",
       "time": "BMO",
-      "marketCap": 96389816000,
+      "marketCap": 93205447000,
       "epsForecast": "$1.72"
     },
     {
@@ -2591,7 +2573,7 @@
       "company": "Synopsys, Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 82578145000,
+      "marketCap": 75920687000,
       "epsForecast": "$3.09"
     },
     {
@@ -2600,7 +2582,7 @@
       "company": "AutoZone, Inc.",
       "sector": "",
       "time": "BMO",
-      "marketCap": 52748239000,
+      "marketCap": 52394000000,
       "epsForecast": "$35.98"
     },
     {
@@ -2609,7 +2591,7 @@
       "company": "Broadcom Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 1654778760000,
+      "marketCap": 1453140610000,
       "epsForecast": "$3.45"
     },
     {
@@ -2618,7 +2600,7 @@
       "company": "Adobe Inc.",
       "sector": "",
       "time": "AMC",
-      "marketCap": 86277857000,
+      "marketCap": 84732731000,
       "epsForecast": "$5.11"
     },
     {
@@ -2627,7 +2609,7 @@
       "company": "Costco Wholesale Corporation",
       "sector": "",
       "time": "AMC",
-      "marketCap": 484708188000,
+      "marketCap": 488395014000,
       "epsForecast": "$4.89"
     },
     {
@@ -2636,16 +2618,16 @@
       "company": "Oracle Corporation",
       "sector": "",
       "time": "AMC",
-      "marketCap": 334334493000,
+      "marketCap": 305971855000,
       "epsForecast": "$1.56"
     },
     {
-      "date": "2026-12-16",
+      "date": "2026-12-17",
       "ticker": "MU",
       "company": "Micron Technology, Inc.",
       "sector": "",
-      "time": "",
-      "marketCap": 781179810000,
+      "time": "AMC",
+      "marketCap": 672642430000,
       "epsForecast": "$37.95"
     },
     {
@@ -2654,7 +2636,7 @@
       "company": "Accenture plc",
       "sector": "",
       "time": "BMO",
-      "marketCap": 146169430000,
+      "marketCap": 147901432000,
       "epsForecast": "$3.91"
     },
     {
@@ -2663,17 +2645,8 @@
       "company": "Cintas Corporation",
       "sector": "",
       "time": "",
-      "marketCap": 86927679000,
+      "marketCap": 87360487000,
       "epsForecast": "$1.36"
-    },
-    {
-      "date": "2026-12-17",
-      "ticker": "NKE",
-      "company": "Nike, Inc.",
-      "sector": "",
-      "time": "",
-      "marketCap": 50990653000,
-      "epsForecast": "$0.34"
     }
   ]
 }

@@ -615,18 +615,12 @@ type BridgeState = {
   fetchedAt: number;
 };
 
-/** How often the tab asks the bridge what it holds and what it sent. Nothing here is time critical. */
-const BRIDGE_STATE_POLL_MS = 4000;
 /** How often the TradingApp queue / panic flag is re-read while the page is visible. */
 const EXECUTION_STATUS_POLL_MS = 3000;
 /** A refused or arbitrated order stays on the "blocked" list this long. */
 const BLOCKED_INTENT_WINDOW_MS = 10 * 60_000;
 /** The bridge keeps a rolling window of recent orders; anything older than a session is not "today". */
 const ACTION_LOG_WINDOW_MS = 20 * 60 * 60_000;
-
-function pageIsHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
 
 function localDayKey(timestamp = Date.now()): string {
   const date = new Date(timestamp);
@@ -816,7 +810,6 @@ export function useStreamEngine({
   // candidate list no longer carries a ticker once the book does).
   const benchmarkByTickerRef = useRef<Map<string, string>>(new Map());
   const bridgeStateRef = useRef<BridgeState | null>(null);
-  const bridgePollInFlightRef = useRef(false);
   const publishedRef = useRef({ positions: "", log: "", intents: "" });
 
   const setStreamAutoEnabled = useCallback((nextValue: boolean | ((prev: boolean) => boolean)) => {
@@ -870,7 +863,7 @@ export function useStreamEngine({
       startTransition(() => {
         setStreamEntryReadyCount(rows.reduce((count, row) => (row.status === "ENTRY_READY" ? count + 1 : count), 0));
       });
-      onUpdatedRef.current?.();
+      if (changed) onUpdatedRef.current?.();
       onErrorRef.current?.(null);
   }, [streamDecisionStore, streamSignalStore, streamUpdatedAtStore]);
 
@@ -997,31 +990,6 @@ export function useStreamEngine({
     }
     setStreamSentOrdersCount((prev) => (prev === sent ? prev : sent));
   }, [strategyId, streamActionLogStore, streamOrderIntentStore, streamPositionStore]);
-
-  const pollBridgeState = useCallback(async () => {
-    return;
-    /* Caesar uses the shared engine subscription below; keep this callback for refresh API shape. */
-    if (bridgePollInFlightRef.current) return;
-    bridgePollInFlightRef.current = true;
-    try {
-      const engineResponse = await fetchWithTimeout(bridgeUrl("/api/stream/caesar/engine"), { cache: "no-store" });
-      const engineJson = engineResponse.ok ? await engineResponse.json().catch(() => null) : null;
-      // Positions arrive through the one Caesar-wide shared snapshot below. Keep showing the
-      // last picture if only the engine endpoint is temporarily unavailable.
-      if (!engineJson && !bridgeStateRef.current) return;
-      const previous = bridgeStateRef.current;
-      bridgeStateRef.current = {
-        positions: previous?.positions ?? [],
-        intents: Array.isArray(engineJson?.engine?.recentIntents) ? engineJson.engine.recentIntents : previous?.intents ?? [],
-        fetchedAt: Date.now(),
-      };
-      publishBridgeState();
-    } catch {
-      // The bridge may be down while the frontend is being worked on; the next tick tries again.
-    } finally {
-      bridgePollInFlightRef.current = false;
-    }
-  }, [publishBridgeState]);
 
   // All Caesar panels and browser strategies consume the same positions response. This prevents
   // two browser engines plus the schedule panels from independently fetching the same document.
@@ -1356,10 +1324,9 @@ export function useStreamEngine({
   const refresh = useCallback(async (options?: { refreshBridge?: boolean }) => {
     await Promise.all([
       pollScreen(),
-      pollBridgeState(),
       options?.refreshBridge === false ? Promise.resolve(null) : refreshExecutionStatus(false),
     ]);
-  }, [pollBridgeState, pollScreen, refreshExecutionStatus]);
+  }, [pollScreen, refreshExecutionStatus]);
 
   useEffect(() => {
     onErrorRef.current = onError;
@@ -1374,26 +1341,18 @@ export function useStreamEngine({
     void refresh();
   }, [enabled, refresh]);
 
-  // The candidate screen has its own shared 2s subscription above. This effect keeps only the
-  // remaining bridge status loops and forces a catch-up when the tab becomes visible.
+  // All stream documents have shared subscriptions. Keep only a visibility catch-up; per-instance
+  // interval timers would duplicate those loops once for every strategy mounted in Caesar.
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
-    const bridgeTimer = window.setInterval(() => {
-      if (!pageIsHidden()) void pollBridgeState();
-    }, BRIDGE_STATE_POLL_MS);
-    const statusTimer = window.setInterval(() => {
-      if (!pageIsHidden()) void refreshExecutionStatus(false);
-    }, EXECUTION_STATUS_POLL_MS);
     const onVisibilityChange = () => {
-      if (!pageIsHidden()) void refresh();
+      if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
-      window.clearInterval(bridgeTimer);
-      window.clearInterval(statusTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [enabled, pollBridgeState, pollScreen, refresh, refreshExecutionStatus]);
+  }, [enabled, refresh]);
 
   // A different instance is a different set of tables.
   useEffect(() => {
@@ -1478,13 +1437,12 @@ export function useStreamEngine({
       setStreamSessionStoppedAt(null);
       setStreamSentOrdersCount(0);
     }
-    void pollBridgeState();
-  }, [automationConfig?.strategyModeEnabled, enabled, pollBridgeState, streamAutoEnabled]);
+  }, [automationConfig?.strategyModeEnabled, enabled, streamAutoEnabled]);
 
   // The bridge owns the position book, so there is nothing local to reset: this just re-reads it.
   const resetStreamAutomationState = useCallback(() => {
-    void pollBridgeState();
-  }, [pollBridgeState]);
+    void refreshExecutionStatus(true);
+  }, [refreshExecutionStatus]);
 
   // Hides rows from THIS page's tables. The bridge keeps tracking a position until the account is
   // flat, and nothing here can stop it re-entering — that is what the bridge's own manual-close
